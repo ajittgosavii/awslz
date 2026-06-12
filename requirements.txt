@@ -5,3 +5,4 @@ pandas>=2.0
 plotly>=5.20
 graphviz>=0.20
 fpdf2>=2.7
+boto3>=1.34

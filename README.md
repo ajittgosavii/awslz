@@ -23,8 +23,25 @@ and cost impact. Then get an opinionated review from **Claude** (or OpenAI).
   all six WAF pillars, critical practices weighted), top-remediations table, and a
   downloadable branded **PDF design report** (parameters, scorecards, findings with
   remediations, cost breakdown, guardrails).
-- **🔐 Login gate** — branded, animated access page. Set `APP_PASSWORD` in secrets;
-  without it the app runs in demo mode (access key `awslz`).
+- **🚀 IaC Export** — turn the design into deployable artifacts: Terraform
+  (Organizations, OUs, accounts, real SCP policy documents), an LZA
+  `organization/accounts/global` config, or a Control Tower checklist with
+  Account Factory inputs.
+- **🗺️ Roadmap** — Day 0 / Day 1 / Day 2 implementation timeline (Gantt) derived
+  from the design; durations scale with account count, tooling, and network pattern.
+- **📡 Live Estate** — read-only `boto3` scan of a real AWS Organization
+  (accounts, OUs, SCPs, trusted service access) → detected-signals table, estate
+  diagram, and a Well-Architected score of the *actual* estate; one click loads it
+  as the working design to plan the target state.
+- **🗂️ Scenarios** — save named designs per user, side-by-side comparison (radar +
+  delta table for accounts/WAF/cost), JSON export/import.
+- **🔐 Login gate** — branded, animated access page. Single key via `APP_PASSWORD`,
+  or multi-user via a `[users]` table in secrets; demo mode (access key `awslz`)
+  when neither is set.
+- **💵 Region-aware costs** — platform cost estimates scale with a per-region price
+  index (e.g. `sa-east-1` ≈ 1.35× `us-east-1`).
+- **🧠 AI executive summary** — one click generates a CTO-ready summary that is
+  embedded as the opening section of the PDF report.
 - **📚 Reference** — trade-off cheat sheets: account strategies, Control Tower vs LZA
   vs custom, foundational OU layout, landing-zone non-negotiables.
 
@@ -67,8 +84,11 @@ streamlit run app.py
 | `waf.py` | Well-Architected alignment engine — 25 weighted checks across the 6 pillars |
 | `diagrams.py` | Graphviz builders for org structure + network topology |
 | `llm.py` | Provider layer: Claude (Anthropic SDK, streaming) + OpenAI fallback |
-| `ui.py` | Enterprise theme (CSS), branded chrome, animated login gate |
-| `report.py` | Branded PDF design report (fpdf2, pure Python) |
+| `ui.py` | Enterprise theme (CSS), branded chrome, animated login gate (single or multi-user) |
+| `report.py` | Branded PDF design report (fpdf2) with optional AI executive summary |
+| `iac.py` | IaC exporters: Terraform / LZA config / Control Tower checklist |
+| `roadmap.py` | Day 0/1/2 phased implementation plan + Gantt |
+| `live_aws.py` | Read-only AWS Organizations scanner + estate→design mapping |
 
 ## Disclaimer
 

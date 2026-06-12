@@ -5,15 +5,19 @@ Deploy:        Streamlit Community Cloud (see README.md)
 """
 
 import copy
+import json
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import iac
 import llm
+import roadmap
 import ui
 import waf
 from diagrams import network_diagram, org_structure_diagram
+from report import build_pdf_report
 from lz_core import (
     ACCOUNT_STRATEGIES, COMPLIANCE_FRAMEWORKS, ENVIRONMENTS, GOVERNANCE_TOOLING,
     IDENTITY_MODELS, NETWORK_PATTERNS, ORG_SIZES, REGIONS,
@@ -40,6 +44,11 @@ if "design" not in st.session_state:
     st.session_state.design = LZDesign()
 if "chat" not in st.session_state:
     st.session_state.chat = []  # list of {"role", "content"}
+
+_user = st.session_state.get("lz_user", "operator")
+_scen_key = f"scenarios_{_user}"
+if _scen_key not in st.session_state:
+    st.session_state[_scen_key] = {}  # name -> design dict
 
 design: LZDesign = st.session_state.design
 
@@ -110,8 +119,10 @@ waf_overall = waf.overall_score(assessment)
 
 ui.hero(design, n_total, waf_overall, cost["total"])
 
-tab_design, tab_sim, tab_waf, tab_advisor, tab_ref = st.tabs(
-    ["🎨 Design Studio", "🧪 Simulator", "🏛️ Well-Architected", "🤖 AI Advisor", "📚 Reference"])
+(tab_design, tab_sim, tab_waf, tab_iac, tab_road, tab_live,
+ tab_scen, tab_advisor, tab_ref) = st.tabs(
+    ["🎨 Design Studio", "🧪 Simulator", "🏛️ Well-Architected", "🚀 IaC Export",
+     "🗺️ Roadmap", "📡 Live Estate", "🗂️ Scenarios", "🤖 AI Advisor", "📚 Reference"])
 
 # ============================== DESIGN STUDIO ==============================
 
@@ -304,12 +315,237 @@ with tab_waf:
                     st.markdown(f"> 💡 {c['remediation']}")
 
     st.divider()
-    from report import build_pdf_report
-    pdf_bytes = build_pdf_report(design.to_dict(), scores, cost, n_total,
-                                 assessment, waf_overall, recommend_guardrails(design))
-    st.download_button("⬇️ Download full design report (PDF)", pdf_bytes,
-                       file_name="landing-zone-design-report.pdf", mime="application/pdf",
-                       use_container_width=False)
+    st.subheader("Design report")
+    rep1, rep2 = st.columns([1, 1])
+    with rep1:
+        _prov = st.session_state.get("provider", "Claude (Anthropic)")
+        _key = llm.get_api_key(_prov)
+        if st.button("🧠 Generate AI executive summary for the report",
+                     disabled=_key is None,
+                     help="Adds a CTO-ready one-page summary as the first section of the PDF."):
+            ctx = (llm.design_context_markdown(design.to_dict(), scores, cost, n_total)
+                   + "\n\n" + waf.assessment_markdown(assessment))
+            with st.spinner(f"Asking {_prov} for an executive summary…"):
+                try:
+                    st.session_state.exec_summary = llm.complete(
+                        _prov, [{"role": "user", "content": ctx + "\n\n" + llm.EXEC_SUMMARY_PROMPT}], _key)
+                except Exception as e:
+                    st.error(f"LLM call failed: {e}")
+        if _key is None:
+            st.caption("Add an API key in the sidebar to enable the AI executive summary.")
+        if st.session_state.get("exec_summary"):
+            with st.expander("Preview executive summary (included in PDF)"):
+                st.markdown(st.session_state.exec_summary)
+    with rep2:
+        pdf_bytes = build_pdf_report(design.to_dict(), scores, cost, n_total,
+                                     assessment, waf_overall, recommend_guardrails(design),
+                                     exec_summary=st.session_state.get("exec_summary"))
+        st.download_button("⬇️ Download full design report (PDF)", pdf_bytes,
+                           file_name="landing-zone-design-report.pdf", mime="application/pdf",
+                           use_container_width=True)
+        if st.session_state.get("exec_summary"):
+            st.caption("✅ AI executive summary will be included as the opening section.")
+
+# ================================ IAC EXPORT ================================
+
+with tab_iac:
+    st.subheader("Infrastructure as Code export")
+    st.caption("Deterministic, reviewable starting points generated from the current design — "
+               "always review and adapt before applying to a real organization.")
+
+    fmt = st.radio("Format", ["Terraform", "Landing Zone Accelerator (LZA)", "Control Tower checklist"],
+                   horizontal=True)
+    if fmt == "Terraform":
+        tf = iac.terraform_export(design)
+        st.download_button("⬇️ Download main.tf", tf, file_name="main.tf", mime="text/plain")
+        st.code(tf, language="hcl")
+    elif fmt == "Landing Zone Accelerator (LZA)":
+        yml = iac.lza_config(design)
+        st.download_button("⬇️ Download lza-config.yaml", yml,
+                           file_name="lza-config.yaml", mime="text/yaml")
+        st.code(yml, language="yaml")
+    else:
+        md = iac.control_tower_checklist(design)
+        st.download_button("⬇️ Download control-tower-checklist.md", md,
+                           file_name="control-tower-checklist.md", mime="text/markdown")
+        st.markdown(md)
+
+# ================================= ROADMAP ==================================
+
+with tab_road:
+    st.subheader("Day 0 / Day 1 / Day 2 implementation roadmap")
+    st.caption("Phased plan derived from your design — durations are indicative and scale "
+               "with account count, governance tooling, and network pattern.")
+    st.plotly_chart(roadmap.timeline_figure(design), use_container_width=True)
+    with st.expander("Roadmap as a table"):
+        st.dataframe(roadmap.plan_dataframe(design), use_container_width=True, hide_index=True)
+
+# ================================ LIVE ESTATE ===============================
+
+with tab_live:
+    st.subheader("Assess your real AWS estate")
+    st.caption("Read-only scan of AWS Organizations — maps your actual estate onto the same "
+               "Well-Architected assessment used for designs.")
+    st.warning("Use **temporary, read-only** credentials (e.g. an STS session for a role with "
+               "`AWSOrganizationsReadOnlyAccess`). Credentials stay in this session only and are "
+               "never stored.", icon="🔒")
+    with st.expander("IAM permissions used (all read-only)"):
+        import live_aws as _law
+        st.code("\n".join(_law.READONLY_CALLS), language="text")
+
+    with st.form("live_creds"):
+        lc1, lc2 = st.columns(2)
+        ak = lc1.text_input("Access key ID")
+        sk = lc2.text_input("Secret access key", type="password")
+        tok = st.text_input("Session token (for temporary credentials)", type="password")
+        reg = st.selectbox("Region for API calls", REGIONS, index=0)
+        scan_now = st.form_submit_button("📡 Scan organization (read-only)")
+
+    if scan_now:
+        if not ak or not sk:
+            st.error("Access key ID and secret access key are required.")
+        else:
+            import live_aws
+            with st.spinner("Scanning AWS Organizations…"):
+                st.session_state.live_scan = live_aws.scan_organization(ak, sk, tok, reg)
+
+    scan = st.session_state.get("live_scan")
+    if scan:
+        if not scan.get("ok"):
+            st.error(scan.get("error", "Scan failed."))
+        else:
+            import live_aws
+            st.success(f"Organization **{scan['org']['Id']}** — "
+                       f"{len(scan['accounts'])} accounts, {len(scan['ous'])} OUs, "
+                       f"{len(scan['policies'])} SCPs", icon="✅")
+            for w in scan.get("warnings", []):
+                st.caption(f"⚠️ partial: {w}")
+
+            lcol, rcol = st.columns(2)
+            with lcol:
+                st.markdown("**Detected estate**")
+                st.graphviz_chart(live_aws.estate_diagram(scan), use_container_width=True)
+            with rcol:
+                st.markdown("**Detected signals**")
+                st.dataframe(pd.DataFrame(scan["signals"]),
+                             use_container_width=True, hide_index=True)
+
+            mapped = scan["mapped_design"]
+            live_assessment = waf.assess(mapped)
+            live_overall = waf.overall_score(live_assessment)
+            st.subheader(f"Well-Architected alignment of your estate: {live_overall}/100")
+            st.caption("Approximation — signals not visible from Organizations alone: "
+                       + "; ".join(scan["undetectable"]) + ".")
+            fig_live = go.Figure(go.Bar(
+                x=[p["score"] for p in live_assessment.values()],
+                y=list(live_assessment.keys()), orientation="h",
+                marker_color=["#3F8624" if p["score"] >= 80 else "#FF9900" if p["score"] >= 55
+                              else "#B0084D" for p in live_assessment.values()],
+                text=[f"{p['score']}" for p in live_assessment.values()],
+                textposition="outside"))
+            fig_live.update_layout(xaxis=dict(range=[0, 110]), yaxis=dict(autorange="reversed"),
+                                   height=300, margin=dict(l=10, r=10, t=10, b=10))
+            st.plotly_chart(fig_live, use_container_width=True)
+
+            if st.button("⬅️ Load detected estate as my working design"):
+                st.session_state.design = mapped
+                st.rerun()
+
+# ================================= SCENARIOS ================================
+
+with tab_scen:
+    st.subheader(f"Scenario manager — {_user}")
+    st.caption("Save named design scenarios, compare them side-by-side, and export/import as "
+               "JSON. Saved scenarios live in this browser session — export to keep them.")
+
+    sc1, sc2 = st.columns([2, 1])
+    with sc1:
+        new_name = st.text_input("Scenario name", placeholder="e.g. target-state-2027")
+    with sc2:
+        st.write("")
+        if st.button("💾 Save current design", use_container_width=True, disabled=not new_name):
+            st.session_state[_scen_key][new_name] = design.to_dict()
+            st.success(f"Saved '{new_name}'")
+
+    scenarios = st.session_state[_scen_key]
+    if scenarios:
+        rows = []
+        for name, ddict in scenarios.items():
+            sd = LZDesign(**ddict)
+            sa = waf.assess(sd)
+            rows.append({"Scenario": name, "Strategy": sd.account_strategy,
+                         "Accounts": total_accounts(sd),
+                         "WAF": waf.overall_score(sa),
+                         "Cost/mo": f"${estimate_monthly_cost(sd)['total']:,.0f}"})
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        m1, m2, m3 = st.columns(3)
+        pick = m1.selectbox("Scenario", list(scenarios.keys()))
+        if m2.button("📂 Load", use_container_width=True):
+            st.session_state.design = LZDesign(**scenarios[pick])
+            st.rerun()
+        if m3.button("🗑️ Delete", use_container_width=True):
+            del scenarios[pick]
+            st.rerun()
+
+        if len(scenarios) >= 2:
+            st.divider()
+            st.subheader("Compare two scenarios")
+            cc1, cc2 = st.columns(2)
+            names = list(scenarios.keys())
+            a_name = cc1.selectbox("Scenario A", names, index=0)
+            b_name = cc2.selectbox("Scenario B", names, index=1)
+            if a_name != b_name:
+                da, db = LZDesign(**scenarios[a_name]), LZDesign(**scenarios[b_name])
+                sa_, sb_ = score_design(da), score_design(db)
+                dims = list(sa_.keys())
+                fig_cmp = go.Figure()
+                for nm, sc_, col in ((a_name, sa_, "#FF9900"), (b_name, sb_, "#2DD4BF")):
+                    fig_cmp.add_trace(go.Scatterpolar(
+                        r=[sc_[x] for x in dims] + [sc_[dims[0]]],
+                        theta=dims + [dims[0]], name=nm, line_color=col))
+                fig_cmp.update_layout(polar=dict(radialaxis=dict(range=[0, 100])),
+                                      height=420, legend=dict(orientation="h", y=-0.15))
+                st.plotly_chart(fig_cmp, use_container_width=True)
+
+                wa, wb = waf.overall_score(waf.assess(da)), waf.overall_score(waf.assess(db))
+                ca, cb = estimate_monthly_cost(da)["total"], estimate_monthly_cost(db)["total"]
+                delta_df = pd.DataFrame([
+                    {"Metric": "Total accounts", a_name: total_accounts(da),
+                     b_name: total_accounts(db), "Δ (B−A)": total_accounts(db) - total_accounts(da)},
+                    {"Metric": "Well-Architected /100", a_name: wa, b_name: wb, "Δ (B−A)": wb - wa},
+                    {"Metric": "Platform cost $/mo", a_name: round(ca), b_name: round(cb),
+                     "Δ (B−A)": round(cb - ca)},
+                ] + [{"Metric": k, a_name: sa_[k], b_name: sb_[k], "Δ (B−A)": sb_[k] - sa_[k]}
+                     for k in dims])
+                st.dataframe(delta_df, use_container_width=True, hide_index=True)
+
+        st.divider()
+        ex1, ex2 = st.columns(2)
+        with ex1:
+            st.download_button("⬇️ Export all scenarios (JSON)",
+                               json.dumps({"user": _user, "scenarios": scenarios}, indent=2),
+                               file_name="lz-scenarios.json", mime="application/json",
+                               use_container_width=True)
+        with ex2:
+            up = st.file_uploader("Import scenarios JSON", type="json", label_visibility="collapsed")
+            if up is not None:
+                try:
+                    data = json.load(up)
+                    imported = data.get("scenarios", {})
+                    valid = {k: v for k, v in imported.items() if isinstance(v, dict)}
+                    # validate each by constructing
+                    for k, v in list(valid.items()):
+                        try:
+                            LZDesign(**v)
+                        except TypeError:
+                            del valid[k]
+                    scenarios.update(valid)
+                    st.success(f"Imported {len(valid)} scenario(s).")
+                except Exception as e:
+                    st.error(f"Import failed: {e}")
+    else:
+        st.info("No saved scenarios yet — set a name and save the current design.")
 
 # ================================ AI ADVISOR ================================
 

@@ -118,13 +118,32 @@ class _Report(FPDF):
 
 
 def build_pdf_report(design_dict: dict, scores: dict, cost: dict, n_total: int,
-                     assessment: dict, waf_overall: int, guardrails: list) -> bytes:
+                     assessment: dict, waf_overall: int, guardrails: list,
+                     exec_summary: str | None = None) -> bytes:
     pdf = _Report(format="A4")
     pdf.set_auto_page_break(auto=True, margin=18)
     pdf.add_page()
     pdf.title_band(f"Generated {date.today().isoformat()}  |  "
                    f"{design_dict.get('org_size', '')} profile  |  {n_total} accounts  |  "
                    f"Well-Architected alignment {waf_overall}/100")
+
+    # --- 0. Executive summary (AI-generated, optional) ---
+    if exec_summary:
+        pdf.section("Executive Summary")
+        pdf.set_font("Helvetica", "", 9.5)
+        pdf.set_text_color(*INK)
+        for para in exec_summary.split("\n"):
+            para = para.strip()
+            if not para:
+                pdf.ln(2)
+                continue
+            # strip markdown bold/bullets for clean prose rendering
+            clean = para.replace("**", "").replace("##", "").replace("# ", "")
+            if clean.startswith(("- ", "* ")):
+                pdf.set_x(pdf.l_margin + 4)
+                clean = "* " + clean[2:]
+            pdf.multi_cell(0, 5.2, _tx(clean), new_x="LMARGIN", new_y="NEXT")
+        pdf.add_page()
 
     # --- 1. Design parameters ---
     pdf.section("1. Design Parameters")

@@ -226,6 +226,12 @@ def score_design(d: LZDesign) -> dict:
 # Cost model (rough monthly USD estimates — demo purposes)
 # ---------------------------------------------------------------------------
 
+# Relative price index vs us-east-1 (rough, demo purposes)
+REGION_PRICE_INDEX = {
+    "us-east-1": 1.00, "us-west-2": 1.00, "eu-west-1": 1.05, "eu-central-1": 1.09,
+    "ap-southeast-1": 1.10, "ap-southeast-2": 1.12, "ap-south-1": 1.02, "sa-east-1": 1.35,
+}
+
 UNIT_COSTS = {
     "guardduty_per_account": 25.0,
     "securityhub_per_account": 12.0,
@@ -271,8 +277,13 @@ def estimate_monthly_cost(d: LZDesign) -> dict:
     if d.backup_dr:
         items["AWS Backup + cross-region copies (nominal)"] = 60.0 * n_region
 
+    # Region price index: scale by the average index of selected regions
+    idx = sum(REGION_PRICE_INDEX.get(r, 1.05) for r in d.regions) / n_region
+    items = {k: v * idx for k, v in items.items()}
+
     total = round(sum(items.values()), 2)
-    return {"items": {k: round(v, 2) for k, v in items.items()}, "total": total}
+    return {"items": {k: round(v, 2) for k, v in items.items()}, "total": total,
+            "region_index": round(idx, 3)}
 
 
 # ---------------------------------------------------------------------------

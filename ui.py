@@ -270,15 +270,24 @@ def inject_css():
 _DEMO_PASSWORD = "awslz"
 
 
-def _expected_password() -> tuple[str, bool]:
-    """Return (password, is_demo_fallback)."""
+def _auth_config() -> tuple[dict | None, str, bool]:
+    """Return (users_table_or_None, single_password, is_demo_fallback).
+
+    Multi-user mode: define a [users] table in secrets (username = "password").
+    Single-password mode: APP_PASSWORD. Demo fallback otherwise.
+    """
+    try:
+        if "users" in st.secrets and len(dict(st.secrets["users"])) > 0:
+            return dict(st.secrets["users"]), "", False
+    except Exception:
+        pass
     for name in ("APP_PASSWORD", "PASSWORD", "LOGIN_PASSWORD"):
         try:
             if name in st.secrets and st.secrets[name]:
-                return str(st.secrets[name]), False
+                return None, str(st.secrets[name]), False
         except Exception:
             break
-    return _DEMO_PASSWORD, True
+    return None, _DEMO_PASSWORD, True
 
 
 def login_gate() -> bool:
@@ -286,7 +295,7 @@ def login_gate() -> bool:
     if st.session_state.get("lz_authed"):
         return True
 
-    expected, is_demo = _expected_password()
+    users, expected, is_demo = _auth_config()
 
     st.markdown(
         f"""
@@ -309,16 +318,28 @@ def login_gate() -> bool:
     _, mid, _ = st.columns([1, 1.1, 1])
     with mid:
         with st.form("lz_login", border=False):
+            user = ""
+            if users is not None:
+                user = st.text_input("Username", placeholder="Username…",
+                                     label_visibility="collapsed")
             pw = st.text_input("Access key", type="password",
                                placeholder="Enter access key…",
                                label_visibility="collapsed")
             submitted = st.form_submit_button("⏻  Enter the Studio", use_container_width=True)
             if is_demo:
-                st.caption(f"Demo mode — access key is `{_DEMO_PASSWORD}`. "
-                           "Set `APP_PASSWORD` in Streamlit secrets to change it.")
+                st.caption(f"Demo mode — access key is `{_DEMO_PASSWORD}`. Set `APP_PASSWORD` "
+                           "(or a `[users]` table) in Streamlit secrets to change it.")
         if submitted:
-            if pw == expected:
+            if users is not None:
+                if user in users and pw == str(users[user]):
+                    st.session_state.lz_authed = True
+                    st.session_state.lz_user = user
+                    st.rerun()
+                else:
+                    st.error("Invalid username or access key.")
+            elif pw == expected:
                 st.session_state.lz_authed = True
+                st.session_state.lz_user = "operator"
                 st.rerun()
             else:
                 st.error("Invalid access key.")
@@ -326,8 +347,15 @@ def login_gate() -> bool:
 
 
 def logout_button():
+    user = st.session_state.get("lz_user", "operator")
+    st.markdown(
+        f"<div style='font-family:var(--lz-mono); font-size:.68rem; color:var(--lz-mut); "
+        f"letter-spacing:.1em; padding-bottom:.3rem;'>SIGNED IN AS "
+        f"<span style='color:var(--lz-amber)'>{html.escape(user.upper())}</span></div>",
+        unsafe_allow_html=True)
     if st.button("⎋ Sign out", use_container_width=True):
         st.session_state.lz_authed = False
+        st.session_state.lz_user = None
         st.rerun()
 
 

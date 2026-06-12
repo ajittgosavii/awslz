@@ -86,6 +86,19 @@ def _stream_openai(messages: list[dict], api_key: str):
             yield delta
 
 
+def complete(provider: str, messages: list[dict], api_key: str) -> str:
+    """Non-streaming completion (joins the stream)."""
+    return "".join(stream_completion(provider, messages, api_key))
+
+
+EXEC_SUMMARY_PROMPT = """Write a one-page executive summary of this landing zone design \
+for a CTO/CIO audience. Structure: (1) Verdict — one paragraph, plain language; \
+(2) Key strengths — 3 bullets; (3) Material risks — up to 4 bullets with business impact; \
+(4) Recommended investment — top 3 actions with rough effort (S/M/L). \
+No headings deeper than bold text, no tables, no code. Keep it under 350 words. \
+Write in plain prose suitable for a board paper — no jargon without explanation."""
+
+
 def design_context_markdown(design_dict: dict, scores: dict, cost: dict, n_accounts: int) -> str:
     """Build the design summary passed to the LLM as context."""
     lines = ["## Current Landing Zone Design\n"]
