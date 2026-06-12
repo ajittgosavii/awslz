@@ -21,7 +21,8 @@ and cost impact. Then get an opinionated review from **Claude** (or OpenAI).
   from your organization profile.
 - **🏛️ Well-Architected** — pillar-by-pillar alignment assessment (25 checks across
   all six WAF pillars, critical practices weighted), top-remediations table, and a
-  downloadable Markdown design report.
+  downloadable branded **PDF design report** (parameters, scorecards, findings with
+  remediations, cost breakdown, guardrails).
 - **🔐 Login gate** — branded, animated access page. Set `APP_PASSWORD` in secrets;
   without it the app runs in demo mode (access key `awslz`).
 - **📚 Reference** — trade-off cheat sheets: account strategies, Control Tower vs LZA
@@ -67,6 +68,7 @@ streamlit run app.py
 | `diagrams.py` | Graphviz builders for org structure + network topology |
 | `llm.py` | Provider layer: Claude (Anthropic SDK, streaming) + OpenAI fallback |
 | `ui.py` | Enterprise theme (CSS), branded chrome, animated login gate |
+| `report.py` | Branded PDF design report (fpdf2, pure Python) |
 
 ## Disclaimer
 
