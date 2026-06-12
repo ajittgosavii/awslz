@@ -25,15 +25,23 @@ changes in priority order, then a suggested migration path. Keep responses focus
 no generic AWS marketing language."""
 
 
+# Accept common naming variants so a slightly different secret name still works.
+SECRET_ALIASES = {
+    "Claude (Anthropic)": ["ANTHROPIC_API_KEY", "ANTHROPIC_KEY", "CLAUDE_API_KEY"],
+    "OpenAI": ["OPENAI_API_KEY", "OPEN_API_KEY", "OPENAI_KEY"],
+}
+
+
 def get_api_key(provider: str) -> str | None:
-    """Resolve API key: st.secrets first, then session (sidebar input)."""
-    secret_name = "ANTHROPIC_API_KEY" if provider == "Claude (Anthropic)" else "OPENAI_API_KEY"
-    try:
-        if secret_name in st.secrets:
-            return st.secrets[secret_name]
-    except Exception:
-        pass
-    return st.session_state.get(f"key_{secret_name}") or None
+    """Resolve API key: st.secrets (any known alias) first, then sidebar input."""
+    for name in SECRET_ALIASES[provider]:
+        try:
+            if name in st.secrets and st.secrets[name]:
+                return st.secrets[name]
+        except Exception:
+            break
+    canonical = SECRET_ALIASES[provider][0]
+    return st.session_state.get(f"key_{canonical}") or None
 
 
 def stream_completion(provider: str, messages: list[dict], api_key: str):
