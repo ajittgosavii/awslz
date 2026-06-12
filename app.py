@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import llm
+import ui
 import waf
 from diagrams import network_diagram, org_structure_diagram
 from lz_core import (
@@ -25,6 +26,11 @@ st.set_page_config(
     page_icon="🏗️",
     layout="wide",
 )
+
+ui.inject_css()
+
+if not ui.login_gate():
+    st.stop()
 
 # ---------------------------------------------------------------------------
 # Session state
@@ -42,7 +48,7 @@ design: LZDesign = st.session_state.design
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    st.title("🏗️ Landing Zone Studio")
+    ui.sidebar_brand()
     st.caption("Design, simulate, and stress-test AWS multi-account landing zones.")
 
     st.header("1. Organization profile")
@@ -85,6 +91,9 @@ with st.sidebar:
     else:
         st.success(f"{provider} key configured", icon="🔑")
 
+    st.divider()
+    ui.logout_button()
+
 # ---------------------------------------------------------------------------
 # Derived values
 # ---------------------------------------------------------------------------
@@ -96,8 +105,10 @@ assessment = waf.assess(design)
 waf_overall = waf.overall_score(assessment)
 
 # ---------------------------------------------------------------------------
-# Tabs
+# Hero + tabs
 # ---------------------------------------------------------------------------
+
+ui.hero(design, n_total, waf_overall, cost["total"])
 
 tab_design, tab_sim, tab_waf, tab_advisor, tab_ref = st.tabs(
     ["🎨 Design Studio", "🧪 Simulator", "🏛️ Well-Architected", "🤖 AI Advisor", "📚 Reference"])

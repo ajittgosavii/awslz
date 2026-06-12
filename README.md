@@ -19,6 +19,11 @@ and cost impact. Then get an opinionated review from **Claude** (or OpenAI).
   **Claude Opus 4.8** (default) or **OpenAI GPT-4o**.
 - **✨ Auto-suggest** — rule-based recommendation engine proposes a complete design
   from your organization profile.
+- **🏛️ Well-Architected** — pillar-by-pillar alignment assessment (25 checks across
+  all six WAF pillars, critical practices weighted), top-remediations table, and a
+  downloadable Markdown design report.
+- **🔐 Login gate** — branded, animated access page. Set `APP_PASSWORD` in secrets;
+  without it the app runs in demo mode (access key `awslz`).
 - **📚 Reference** — trade-off cheat sheets: account strategies, Control Tower vs LZA
   vs custom, foundational OU layout, landing-zone non-negotiables.
 
@@ -45,6 +50,8 @@ streamlit run app.py
    ANTHROPIC_API_KEY = "sk-ant-..."
    # and/or
    OPENAI_API_KEY = "sk-..."
+   # login access key (demo mode key is "awslz" if omitted)
+   APP_PASSWORD = "choose-a-strong-passphrase"
    ```
 
 4. Deploy. `requirements.txt` (Python deps) and `packages.txt` (Graphviz binary)
@@ -56,8 +63,10 @@ streamlit run app.py
 |---|---|
 | `app.py` | Streamlit UI — tabs, charts, chat |
 | `lz_core.py` | Domain logic: account math, scoring model, cost estimates, SCP recommendations, rule-based design suggester |
+| `waf.py` | Well-Architected alignment engine — 25 weighted checks across the 6 pillars |
 | `diagrams.py` | Graphviz builders for org structure + network topology |
 | `llm.py` | Provider layer: Claude (Anthropic SDK, streaming) + OpenAI fallback |
+| `ui.py` | Enterprise theme (CSS), branded chrome, animated login gate |
 
 ## Disclaimer
 
