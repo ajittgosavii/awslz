@@ -1,0 +1,6 @@
+streamlit>=1.37
+anthropic>=0.40
+openai>=1.40
+pandas>=2.0
+plotly>=5.20
+graphviz>=0.20
