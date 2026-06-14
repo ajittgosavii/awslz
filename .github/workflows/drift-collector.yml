@@ -53,6 +53,10 @@ jobs:
       LZ_USER: ${{ github.event.inputs.user || vars.LZ_USER || 'operator' }}
       LZ_LABEL: ${{ github.event.inputs.label || 'scheduled' }}
       LZ_DB_PATH: data/lz_scenarios.db
+      # If set, the collector writes to Postgres (durable + shared with the app)
+      # and the commit-back step is skipped. Otherwise it uses the SQLite file and
+      # commits it to the repo.
+      LZ_DATABASE_URL: ${{ secrets.LZ_DATABASE_URL }}
     steps:
       - name: Check configuration
         id: cfg
@@ -79,8 +83,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # the collector only needs boto3 + the graphviz python package (imported
-          # by live_aws) — install those rather than the full UI stack.
+          # by live_aws); add psycopg only when writing to Postgres.
           pip install "boto3>=1.34" "graphviz>=0.20"
+          if [ -n "$LZ_DATABASE_URL" ]; then pip install "psycopg[binary]>=3.1"; fi
 
       - name: Configure AWS credentials (OIDC)
         if: steps.cfg.outputs.enabled == 'true'
@@ -95,8 +100,10 @@ jobs:
         run: |
           python drift_collector.py --user "$LZ_USER" --region "$AWS_REGION" --label "$LZ_LABEL"
 
-      - name: Commit snapshot
-        if: steps.cfg.outputs.enabled == 'true'
+      - name: Commit snapshot (SQLite mode only)
+        # When LZ_DATABASE_URL is set the snapshot already went to Postgres —
+        # nothing to commit. Only commit the SQLite file back otherwise.
+        if: steps.cfg.outputs.enabled == 'true' && env.LZ_DATABASE_URL == ''
         run: |
           git config user.name "drift-collector[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

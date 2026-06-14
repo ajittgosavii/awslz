@@ -9,3 +9,4 @@ fpdf2>=2.7
 boto3>=1.34
 pyyaml>=6.0
 python-hcl2>=4.3
+psycopg[binary]>=3.1

@@ -117,7 +117,7 @@ streamlit run app.py
 | `app.py` | Streamlit UI — tabs, charts, chat |
 | `lz_core.py` | Domain logic: account math, transparent scoring (`explain_scores`), sourced cost estimates, SCP recommendations, rule-based design suggester |
 | `pricing.py` | Sourced AWS list prices + stated usage assumptions + optional live AWS Price List API overlay |
-| `store.py` | Durable SQLite persistence for saved scenarios (keyed by user) |
+| `store.py` | Durable persistence (PostgreSQL or SQLite) for scenarios, snapshots, comments |
 | `fixes.py` | One-click remediation engine — maps WAF findings to design mutations |
 | `maturity.py` | Maturity levels, next-best-action, and peer benchmark profiles |
 | `interactive_diagrams.py` | Clickable streamlit-agraph org graph with node drill-down |
@@ -175,12 +175,38 @@ The read-only IAM set is the same one listed in the Live Estate tab
 
 ## Persistence & configuration
 
-Saved scenarios are stored in a SQLite database. By default this is
-`lz_scenarios.db` next to the app; set the `LZ_DB_PATH` environment variable to
-relocate it (e.g. to a mounted volume). **Note:** on Streamlit Community Cloud the
-container filesystem is ephemeral and is wiped on redeploy/sleep — for durable
-multi-user storage there, point `LZ_DB_PATH` at a persistent volume or swap
-`store.py`'s connection for a managed database (the module's public API is stable).
+`store.py` (scenarios, drift snapshots, comments) has a pluggable backend chosen
+at runtime:
+
+- **PostgreSQL** when a connection URL is provided — set `DATABASE_URL` in
+  Streamlit **secrets** (the app copies it to `LZ_DATABASE_URL`), or set
+  `LZ_DATABASE_URL` directly for the collector. The schema is created
+  automatically on first connect.
+- **SQLite** otherwise — `LZ_DB_PATH` env, else `lz_scenarios.db` next to the app.
+  Great for local dev and persistent single-host deploys.
+
+### Streamlit Community Cloud — use Postgres
+
+Streamlit Community Cloud's container filesystem is **ephemeral**: it is wiped on
+redeploy, reboot, and after inactivity (sleep). A local SQLite file there is **not
+durable for app-side writes** — scenarios/comments/snapshots a user saves would
+vanish. The app shows a warning in this mode. For real durability (and to share
+data with the scheduled drift collector), use a free managed Postgres:
+
+1. Create a database on **[Neon](https://neon.tech)** or **[Supabase](https://supabase.com)**
+   (free tier) and copy its connection string
+   (`postgresql://user:pass@host/dbname?sslmode=require`).
+2. In the app's **Settings → Secrets**, add:
+   ```toml
+   DATABASE_URL = "postgresql://user:pass@host/dbname?sslmode=require"
+   ```
+3. For the scheduled GitHub Action, add the same string as repo secret
+   **`LZ_DATABASE_URL`** — the collector then writes actuals straight to Postgres
+   (and the workflow skips the SQLite commit-back). Now the app and collector
+   share one durable store.
+
+`requirements.txt` includes `psycopg[binary]`, so Postgres works out of the box on
+Streamlit Cloud. With no `DATABASE_URL` set, everything falls back to SQLite.
 
 ## Disclaimer
 

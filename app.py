@@ -7,6 +7,7 @@ Deploy:        Streamlit Community Cloud (see README.md)
 import copy
 import html
 import json
+import os
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -45,6 +46,17 @@ st.set_page_config(
 )
 
 ui.inject_css()
+
+# Durable storage: on Streamlit Cloud the filesystem is ephemeral, so prefer an
+# external Postgres if DATABASE_URL is in secrets. store.py reads LZ_DATABASE_URL.
+if not os.environ.get("LZ_DATABASE_URL"):
+    try:
+        for _k in ("DATABASE_URL", "LZ_DATABASE_URL"):
+            if _k in st.secrets and st.secrets[_k]:
+                os.environ["LZ_DATABASE_URL"] = str(st.secrets[_k])
+                break
+    except Exception:
+        pass
 
 if not ui.login_gate():
     st.stop()
@@ -805,10 +817,15 @@ with tab_scen:
         st.caption("Copy the browser URL after clicking, or share the token below "
                    "(paste it into another session's URL as `?d=<token>`).")
         st.code(token, language="text")
-    if _PERSIST:
+    if _PERSIST and store.backend() == "postgresql":
         st.caption("Save named design scenarios, compare them side-by-side, and export/import as "
-                   "JSON. Scenarios are **saved durably** (SQLite) per user and persist across "
-                   "sessions and restarts.")
+                   "JSON. Scenarios are **saved durably (PostgreSQL)** per user and shared with the "
+                   "drift collector — they persist across sessions, restarts, and redeploys.")
+    elif _PERSIST:
+        st.caption("Save named design scenarios, compare them side-by-side, and export/import as "
+                   "JSON. Scenarios are saved to **SQLite** — durable on a persistent host, but "
+                   "⚠️ **ephemeral on Streamlit Community Cloud** (set `DATABASE_URL` in secrets to a "
+                   "managed Postgres for true durability). Export to keep them.")
     else:
         st.caption("Save named design scenarios, compare them side-by-side, and export/import as "
                    "JSON. ⚠️ Durable store unavailable — scenarios live in this session only; "
