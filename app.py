@@ -11,12 +11,22 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import fixes
 import iac
 import llm
+import maturity
 import roadmap
 import store
 import ui
 import waf
+import wizard
+
+try:
+    from streamlit_agraph import agraph
+    import interactive_diagrams as idiagrams
+    _HAS_AGRAPH = True
+except Exception:  # streamlit-agraph not installed — fall back to Graphviz
+    _HAS_AGRAPH = False
 from diagrams import network_diagram, org_structure_diagram
 from report import build_pdf_report
 from lz_core import (
@@ -35,6 +45,10 @@ st.set_page_config(
 ui.inject_css()
 
 if not ui.login_gate():
+    st.stop()
+
+# Guided onboarding wizard (renders in place of the app while active).
+if wizard.run_wizard():
     st.stop()
 
 # ---------------------------------------------------------------------------
@@ -112,6 +126,10 @@ with st.sidebar:
         )
         st.rerun()
 
+    if st.button("🧭 Guided setup (wizard)", use_container_width=True):
+        wizard.launch()
+        st.rerun()
+
     st.divider()
     st.header("AI Advisor settings")
     provider = st.radio("LLM provider", ["Claude (Anthropic)", "OpenAI"], index=0)
@@ -142,6 +160,10 @@ waf_overall = waf.overall_score(assessment)
 
 ui.hero(design, n_total, waf_overall, cost["total"])
 
+# One-click-fix feedback survives the rerun via a session flash.
+if st.session_state.get("_flash"):
+    st.toast(st.session_state.pop("_flash"), icon="✅")
+
 (tab_design, tab_sim, tab_waf, tab_iac, tab_road, tab_live,
  tab_scen, tab_advisor, tab_ref) = st.tabs(
     ["🎨 Design Studio", "🧪 Simulator", "🏛️ Well-Architected", "🚀 IaC Export",
@@ -158,25 +180,70 @@ with tab_design:
     c5.metric("Well-Architected", f"{waf_overall}/100",
               help="Alignment to the six WAF pillars — see the Well-Architected tab.")
 
+    # --- Maturity journey banner ---
+    _lvl = maturity.level_for(waf_overall)
+    mb1, mb2 = st.columns([1, 2])
+    with mb1:
+        st.markdown(
+            f"<div style='font-family:monospace;font-size:.7rem;letter-spacing:.12em;"
+            f"color:#8C9CB8'>MATURITY · LEVEL {_lvl['level']}/{_lvl['max_level']}</div>"
+            f"<div style='font-family:Bricolage Grotesque,serif;font-size:1.6rem;"
+            f"color:#E9EEF7'>{_lvl['icon']} {_lvl['name']}</div>"
+            f"<div style='color:#8C9CB8;font-size:.85rem'>{_lvl['blurb']}</div>",
+            unsafe_allow_html=True)
+    with mb2:
+        if _lvl["next_name"]:
+            st.progress(_lvl["progress_to_next"],
+                        text=f"{_lvl['points_to_next']} pts to **{_lvl['next_name']}**")
+        else:
+            st.progress(1.0, text="Top maturity level reached 🏆")
+        _next = waf.top_remediations(assessment, limit=1)
+        if _next:
+            st.markdown(f"**🎯 Next best action:** {_next[0]['id']} — {_next[0]['title']}  \n"
+                        f"<span style='color:#8C9CB8;font-size:.85rem'>{_next[0]['remediation']}</span>",
+                        unsafe_allow_html=True)
+            st.caption("Apply it with one click in the 🏛️ Well-Architected tab.")
+    st.divider()
+
     col_org, col_net = st.columns(2)
     with col_org:
         st.subheader("Organization structure")
-        st.graphviz_chart(org_structure_diagram(design), use_container_width=True)
+        if _HAS_AGRAPH:
+            _nodes, _edges, _cfg, _det = idiagrams.build_org_graph(design)
+            _clicked = agraph(nodes=_nodes, edges=_edges, config=_cfg)
+            if _clicked and _clicked in _det:
+                st.info(_det[_clicked])
+            else:
+                st.caption("💡 Click a node to inspect its purpose and guardrails · drag to rearrange.")
+        else:
+            st.graphviz_chart(org_structure_diagram(design), use_container_width=True)
     with col_net:
         st.subheader("Network topology")
         st.graphviz_chart(network_diagram(design), use_container_width=True)
 
         st.subheader("Design scorecard")
+        show_peers = st.checkbox("Overlay peer benchmarks", value=False,
+                                 help="Compare against typical designs for each org shape.")
+        dims_r = list(scores.keys())
         fig = go.Figure()
         fig.add_trace(go.Scatterpolar(
             r=list(scores.values()) + [list(scores.values())[0]],
-            theta=list(scores.keys()) + [list(scores.keys())[0]],
+            theta=dims_r + [dims_r[0]],
             fill="toself", name="Current design",
             line_color="#FF9900",
         ))
+        if show_peers:
+            peer_palette = {"Typical Startup": "#2DD4BF", "Typical Mid-market": "#5B8DEF",
+                            "Regulated Enterprise": "#B0084D"}
+            for pname, pscores in maturity.peer_scores().items():
+                fig.add_trace(go.Scatterpolar(
+                    r=[pscores[d] for d in dims_r] + [pscores[dims_r[0]]],
+                    theta=dims_r + [dims_r[0]], name=pname,
+                    line=dict(color=peer_palette.get(pname, "#888"), dash="dot")))
         fig.update_layout(
             polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-            showlegend=False, height=380, margin=dict(l=60, r=60, t=30, b=30),
+            showlegend=show_peers, legend=dict(orientation="h", y=-0.2),
+            height=420 if show_peers else 380, margin=dict(l=60, r=60, t=30, b=30),
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -355,6 +422,36 @@ with tab_waf:
         )
     else:
         st.success("No warnings or failures — this design passes every modeled check. 🎉")
+
+    # --- One-click remediations (close the advisor loop) ---
+    fixable, _seen = [], set()
+    for r in remediations:
+        fa = fixes.fix_for(r["id"])
+        if fa and not fixes.is_already_satisfied(design, r["id"]) and fa["label"] not in _seen:
+            _seen.add(fa["label"])
+            fixable.append(r)
+    if fixable:
+        st.subheader("⚡ One-click remediations")
+        st.caption("Apply a recommended change to the working design and watch every "
+                   "score update instantly — no manual editing.")
+        for r in fixable:
+            fa = fixes.fix_for(r["id"])
+            fc1, fc2 = st.columns([3, 1])
+            sev = "❌" if r["status"] == "fail" else "⚠️"
+            fc1.markdown(f"{sev} **{r['id']} — {r['title']}**  \n"
+                         f"<span style='color:#8C9CB8;font-size:.85rem'>→ {fa['label']}</span>",
+                         unsafe_allow_html=True)
+            with fc2:
+                st.write("")
+                if st.button("⚡ Apply fix", key=f"fix_{r['id']}", use_container_width=True):
+                    new_design, action = fixes.apply_fix(design, r["id"])
+                    new_overall = waf.overall_score(waf.assess(new_design))
+                    delta = new_overall - waf_overall
+                    st.session_state.design = new_design
+                    st.session_state._flash = (
+                        f"{action['label']} · WAF {waf_overall}→{new_overall} "
+                        f"({'+' if delta >= 0 else ''}{delta})")
+                    st.rerun()
 
     st.subheader("Pillar detail")
     icons = {"pass": "✅", "warn": "⚠️", "fail": "❌"}

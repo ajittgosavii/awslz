@@ -7,6 +7,19 @@ and cost impact. Then get an opinionated review from **Claude** (or OpenAI).
 
 ## Features
 
+- **🧭 Guided setup wizard** — a friendly 3-step on-ramp (profile → priorities →
+  review) that produces a complete, scored starting design for first-time users
+  instead of dropping every control at once.
+- **⚡ One-click remediations (closed advisor loop)** — every Well-Architected
+  finding has an *Apply fix* button that mutates the working design and re-scores
+  instantly, with a live toast showing the WAF delta. Advice becomes action.
+- **🕹️ Interactive org diagram** — clickable, draggable force-directed graph
+  (streamlit-agraph); click any OU/account node to drill into its purpose and
+  guardrails (falls back to the static Graphviz render if the package is absent).
+- **🏆 Maturity journey + peer benchmark** — the WAF score becomes a named level
+  (Foundational → Exemplary) with a progress bar, a "next best action", and an
+  optional radar overlay comparing your design to typical Startup / Mid-market /
+  Regulated-Enterprise profiles.
 - **🎨 Design Studio** — pick org size, compliance frameworks, workloads, environments,
   regions, account strategy, network pattern, identity model, and governance tooling.
   See a live AWS Organizations OU tree, network topology diagram, recommended SCP
@@ -95,6 +108,10 @@ streamlit run app.py
 | `lz_core.py` | Domain logic: account math, transparent scoring (`explain_scores`), sourced cost estimates, SCP recommendations, rule-based design suggester |
 | `pricing.py` | Sourced AWS list prices + stated usage assumptions + optional live AWS Price List API overlay |
 | `store.py` | Durable SQLite persistence for saved scenarios (keyed by user) |
+| `fixes.py` | One-click remediation engine — maps WAF findings to design mutations |
+| `maturity.py` | Maturity levels, next-best-action, and peer benchmark profiles |
+| `interactive_diagrams.py` | Clickable streamlit-agraph org graph with node drill-down |
+| `wizard.py` | Guided 3-step onboarding setup flow |
 | `waf.py` | Well-Architected alignment engine — 25 weighted checks, each mapped to the closest official WAF best practice (`exact`/`adapted`) |
 | `diagrams.py` | Graphviz builders for org structure + network topology |
 | `llm.py` | Provider layer: Claude (Anthropic SDK, streaming) + OpenAI fallback |

@@ -4,5 +4,6 @@ openai>=1.40
 pandas>=2.0
 plotly>=5.20
 graphviz>=0.20
+streamlit-agraph>=0.0.45
 fpdf2>=2.7
 boto3>=1.34
