@@ -80,32 +80,32 @@ header[data-testid="stHeader"] { background: transparent; }
   border-top: 1px solid var(--lz-line); padding-top: 1.1rem; margin-top: .4rem;
 }
 
-/* ---------- sidebar scrolling + visible scrollbar ---------- */
-/* The scroll container's test-id has changed across Streamlit versions, so we
-   enable overflow on every known variant. */
-[data-testid="stSidebar"] > div:first-child,
-[data-testid="stSidebarContent"],
-[data-testid="stSidebarUserContent"],
-section[data-testid="stSidebar"] > div {
+/* ---------- sidebar: exactly ONE visible scrollbar ---------- */
+/* Only the sidebar content container scrolls. The inner user-content is forced
+   to overflow:visible so it never renders a second (nested) scrollbar. */
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+  overflow: visible !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
   overflow-y: auto !important;
   max-height: 100vh;
   scrollbar-width: thin;                                   /* Firefox */
   scrollbar-color: rgba(255,153,0,.6) rgba(140,156,184,.10);
 }
-/* WebKit (Chrome/Edge/Safari) — style whichever inner element scrolls. */
-[data-testid="stSidebar"] ::-webkit-scrollbar,
-[data-testid="stSidebar"]::-webkit-scrollbar { width: 11px; }
-[data-testid="stSidebar"] ::-webkit-scrollbar-track,
-[data-testid="stSidebar"]::-webkit-scrollbar-track {
+/* WebKit (Chrome/Edge/Safari) — style only that single scroll container. */
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"]::-webkit-scrollbar {
+  width: 11px;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"]::-webkit-scrollbar-track {
   background: rgba(140,156,184,.08); border-radius: 8px;
 }
-[data-testid="stSidebar"] ::-webkit-scrollbar-thumb,
-[data-testid="stSidebar"]::-webkit-scrollbar-thumb {
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"]::-webkit-scrollbar-thumb {
   background: linear-gradient(180deg, rgba(255,153,0,.65), rgba(255,153,0,.35));
   border-radius: 8px; border: 2px solid transparent; background-clip: padding-box;
 }
-[data-testid="stSidebar"] ::-webkit-scrollbar-thumb:hover,
-[data-testid="stSidebar"]::-webkit-scrollbar-thumb:hover { background: var(--lz-amber); }
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"]::-webkit-scrollbar-thumb:hover {
+  background: var(--lz-amber);
+}
 
 /* ---------- metric cards ---------- */
 [data-testid="stMetric"] {
