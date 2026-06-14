@@ -80,6 +80,33 @@ header[data-testid="stHeader"] { background: transparent; }
   border-top: 1px solid var(--lz-line); padding-top: 1.1rem; margin-top: .4rem;
 }
 
+/* ---------- sidebar scrolling + visible scrollbar ---------- */
+/* The scroll container's test-id has changed across Streamlit versions, so we
+   enable overflow on every known variant. */
+[data-testid="stSidebar"] > div:first-child,
+[data-testid="stSidebarContent"],
+[data-testid="stSidebarUserContent"],
+section[data-testid="stSidebar"] > div {
+  overflow-y: auto !important;
+  max-height: 100vh;
+  scrollbar-width: thin;                                   /* Firefox */
+  scrollbar-color: rgba(255,153,0,.6) rgba(140,156,184,.10);
+}
+/* WebKit (Chrome/Edge/Safari) — style whichever inner element scrolls. */
+[data-testid="stSidebar"] ::-webkit-scrollbar,
+[data-testid="stSidebar"]::-webkit-scrollbar { width: 11px; }
+[data-testid="stSidebar"] ::-webkit-scrollbar-track,
+[data-testid="stSidebar"]::-webkit-scrollbar-track {
+  background: rgba(140,156,184,.08); border-radius: 8px;
+}
+[data-testid="stSidebar"] ::-webkit-scrollbar-thumb,
+[data-testid="stSidebar"]::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(255,153,0,.65), rgba(255,153,0,.35));
+  border-radius: 8px; border: 2px solid transparent; background-clip: padding-box;
+}
+[data-testid="stSidebar"] ::-webkit-scrollbar-thumb:hover,
+[data-testid="stSidebar"]::-webkit-scrollbar-thumb:hover { background: var(--lz-amber); }
+
 /* ---------- metric cards ---------- */
 [data-testid="stMetric"] {
   background: linear-gradient(180deg, var(--lz-panel) 0%, var(--lz-panel-2) 100%);
