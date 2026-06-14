@@ -162,6 +162,15 @@ USAGE = {
     },
 }
 
+# Modeled total AWS spend for ONE workload across all its environments, per month.
+# Used only as the denominator for the "platform overhead as a share of total
+# spend" cost-efficiency ratio — it is a planning proxy, not a billed figure.
+# A mid-market production workload (compute + storage + managed DB + supporting
+# services, dev/test/prod) typically runs a few thousand USD/month; $2,500 is a
+# deliberately conservative midpoint so the ratio is not skewed by an
+# unrealistically small denominator.
+WORKLOAD_SPEND_PROXY_PER_MONTH = 2500.0
+
 # Relative price index vs us-east-1 (applied to the whole estimate). Indicative.
 REGION_PRICE_INDEX = {
     "us-east-1": 1.00, "us-west-2": 1.00, "eu-west-1": 1.05, "eu-central-1": 1.09,

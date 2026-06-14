@@ -209,7 +209,7 @@ def _score_with_breakdown(d: LZDesign):
 
     # --- Cost efficiency ---
     overhead = estimate_monthly_cost(d)["total"]
-    workload_proxy = max(1, d.num_workloads) * 400  # assumed workload spend proxy
+    workload_proxy = max(1, d.num_workloads) * pricing.WORKLOAD_SPEND_PROXY_PER_MONTH
     ratio = overhead / (overhead + workload_proxy)
     cost_eff = _Dim(f"Platform overhead is ~{ratio:.0%} of modeled total spend", 100 - ratio * 160)
     if d.account_strategy == "Single account":

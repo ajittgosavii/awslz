@@ -303,7 +303,8 @@ def _cost(d: LZDesign) -> list:
         "Per-VPC NAT gateways multiply fixed hourly costs."))
 
     overhead = cost["total"]
-    proxy = max(1, d.num_workloads) * 400
+    import pricing
+    proxy = max(1, d.num_workloads) * pricing.WORKLOAD_SPEND_PROXY_PER_MONTH
     ratio = overhead / (overhead + proxy)
     checks.append(_check(
         "COST01-BP05", "Platform overhead proportionate to workload spend",
