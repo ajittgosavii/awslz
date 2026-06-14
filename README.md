@@ -1,5 +1,7 @@
 # 🏗️ AWS Landing Zone Studio
 
+[![CI](https://github.com/ajittgosavii/awslz/actions/workflows/ci.yml/badge.svg)](https://github.com/ajittgosavii/awslz/actions/workflows/ci.yml)
+
 An interactive **simulator + AI advisor** for designing AWS multi-account Landing Zones.
 Play with organization profiles, account strategies, network patterns, and governance
 tooling — and instantly see the org structure, network topology, guardrails, scores,
@@ -207,6 +209,14 @@ data with the scheduled drift collector), use a free managed Postgres:
 
 `requirements.txt` includes `psycopg[binary]`, so Postgres works out of the box on
 Streamlit Cloud. With no `DATABASE_URL` set, everything falls back to SQLite.
+
+### Tests / CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) byte-compiles every module
+and runs the `store.py` test suite ([`tests/test_store.py`](tests/test_store.py))
+against **both backends on every push** — SQLite, and a real **PostgreSQL service
+container** (`LZ_DATABASE_URL` set) — so the Postgres path (placeholders, `ON
+CONFLICT` upserts, schema, ordering) stays covered. Run locally with `pytest -q`.
 
 ## Disclaimer
 
