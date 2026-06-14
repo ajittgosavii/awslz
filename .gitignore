@@ -7,3 +7,6 @@ venv/
 lz_scenarios.db
 lz_scenarios.db-wal
 lz_scenarios.db-shm
+
+# …but DO track the snapshot DB the scheduled GitHub Action commits back
+!data/lz_scenarios.db

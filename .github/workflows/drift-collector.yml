@@ -1,0 +1,109 @@
+name: Drift collector
+
+# Runs the read-only AWS Organizations scan on a schedule, scores the estate with
+# the same Well-Architected engine the app uses, and commits an "actual" drift
+# snapshot back to data/lz_scenarios.db so the app's Drift tab fills in over time.
+#
+# Setup (one-time):
+#   1. Create an IAM role with a GitHub OIDC trust policy (provider
+#      token.actions.githubusercontent.com) scoped to this repo, e.g.
+#      "repo:ajittgosavii/awslz:ref:refs/heads/main".
+#   2. Attach a READ-ONLY policy: AWSOrganizationsReadOnlyAccess plus
+#      controltower:ListLandingZones / GetLandingZone / ListEnabledControls.
+#   3. Add the role ARN as repo secret AWS_OIDC_ROLE_ARN. (Optional repo
+#      variables: AWS_REGION, LZ_USER.)
+#
+# Production note: committing a SQLite DB to the repo is the simplest durable
+# option and works when the app deploys from this repo (e.g. Streamlit Cloud with
+# LZ_DB_PATH=data/lz_scenarios.db). For a server/RDS-backed deployment, replace
+# the checkout+commit steps with an S3 sync or have the collector write to RDS.
+
+on:
+  schedule:
+    - cron: "17 2 * * *"   # 02:17 UTC daily
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "AWS region for API calls"
+        default: "us-east-1"
+        required: false
+      user:
+        description: "Snapshot owner (must match the app user)"
+        default: "operator"
+        required: false
+      label:
+        description: "Snapshot label"
+        default: "scheduled"
+        required: false
+
+concurrency:
+  group: drift-collector
+  cancel-in-progress: false
+
+permissions:
+  id-token: write      # required for OIDC
+  contents: write      # required to commit the snapshot back
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    env:
+      ROLE_ARN: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+      AWS_REGION: ${{ github.event.inputs.region || vars.AWS_REGION || 'us-east-1' }}
+      LZ_USER: ${{ github.event.inputs.user || vars.LZ_USER || 'operator' }}
+      LZ_LABEL: ${{ github.event.inputs.label || 'scheduled' }}
+      LZ_DB_PATH: data/lz_scenarios.db
+    steps:
+      - name: Check configuration
+        id: cfg
+        run: |
+          if [ -z "$ROLE_ARN" ]; then
+            echo "AWS_OIDC_ROLE_ARN secret not set — skipping (configure it to enable)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.cfg.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.cfg.outputs.enabled == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          # the collector only needs boto3 + the graphviz python package (imported
+          # by live_aws) — install those rather than the full UI stack.
+          pip install "boto3>=1.34" "graphviz>=0.20"
+
+      - name: Configure AWS credentials (OIDC)
+        if: steps.cfg.outputs.enabled == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: lz-drift-collector
+
+      - name: Collect drift snapshot
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          python drift_collector.py --user "$LZ_USER" --region "$AWS_REGION" --label "$LZ_LABEL"
+
+      - name: Commit snapshot
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          git config user.name "drift-collector[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "$LZ_DB_PATH"
+          if git diff --staged --quiet; then
+            echo "No snapshot changes to commit."
+          else
+            git commit -m "chore(drift): scheduled actual snapshot [skip ci]"
+            git push
+          fi

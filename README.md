@@ -151,8 +151,22 @@ LZ_DB_PATH=/data/lz_scenarios.db python drift_collector.py --user operator --reg
   python drift_collector.py --user operator --region us-east-1
 ```
 
-On Windows use Task Scheduler; in CI use a scheduled GitHub Action with the repo's
-OIDC role. IAM permissions are the read-only set listed in the Live Estate tab
+On Windows use Task Scheduler. **A ready-made GitHub Action is included** at
+[`.github/workflows/drift-collector.yml`](.github/workflows/drift-collector.yml) —
+it runs nightly (and on demand), assumes a role via **GitHub OIDC** (no static
+keys), and commits the snapshot to `data/lz_scenarios.db`. To enable it:
+
+1. Create an IAM role trusting `token.actions.githubusercontent.com` scoped to
+   this repo, with a **read-only** policy (`AWSOrganizationsReadOnlyAccess` +
+   `controltower:ListLandingZones`/`GetLandingZone`/`ListEnabledControls`).
+2. Add the role ARN as repo secret **`AWS_OIDC_ROLE_ARN`** (optional repo
+   variables: `AWS_REGION`, `LZ_USER`).
+
+Until the secret is set the workflow no-ops cleanly. Point the deployed app at the
+committed snapshots with `LZ_DB_PATH=data/lz_scenarios.db`. For a server/RDS-backed
+deployment, swap the checkout+commit steps for an S3 sync (or write to RDS).
+
+The read-only IAM set is the same one listed in the Live Estate tab
 (Organizations `List*`/`Describe*` + `controltower:ListLandingZones`/`GetLandingZone`).
 
 > Reverse-mode IaC parsing prefers **python-hcl2** for robust real-world Terraform
