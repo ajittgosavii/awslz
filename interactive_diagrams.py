@@ -24,6 +24,10 @@ RED = "#B0084D"
 
 _MAX_WORKLOAD_NODES = 8
 
+# Light label font so node text is legible on the dark "mission control" canvas
+# (vis.js defaults to a dark label colour, which is invisible on our background).
+_LABEL_FONT = {"color": "#E9EEF7", "size": 15, "face": "Helvetica", "strokeWidth": 0}
+
 
 def build_org_graph(d: LZDesign):
     """Return (nodes, edges, config, details) for streamlit-agraph.
@@ -35,7 +39,8 @@ def build_org_graph(d: LZDesign):
     details: dict[str, str] = {}
 
     def node(nid, label, color, size=22, shape="dot"):
-        nodes.append(Node(id=nid, label=label, color=color, size=size, shape=shape))
+        nodes.append(Node(id=nid, label=label, color=color, size=size, shape=shape,
+                          font=_LABEL_FONT))
 
     def edge(a, b):
         edges.append(Edge(source=a, target=b, color="#5A6B86"))
@@ -143,6 +148,6 @@ def _config() -> Config:
     return Config(
         width="100%", height=460, directed=True, physics=True, hierarchical=False,
         nodeHighlightBehavior=True, highlightColor=AMBER, collapsible=False,
-        node={"labelProperty": "label", "renderLabel": True},
+        node={"labelProperty": "label", "renderLabel": True, "font": _LABEL_FONT},
         link={"labelProperty": "label", "renderLabel": False},
     )
