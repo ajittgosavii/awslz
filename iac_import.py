@@ -70,62 +70,179 @@ def parse_iac(filename: str, text: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Terraform (regex-based, tolerant)
+# Terraform — robust HCL parse via python-hcl2, with a regex fallback.
+#
+# Both paths produce the same normalized `norm` dict, which a single builder
+# turns into signals + a mapped design. python-hcl2 handles real-world
+# formatting (comments, nested blocks, expressions) far better than regex; the
+# regex path is a dependency-free safety net.
 # ---------------------------------------------------------------------------
 
-def _parse_terraform(text: str) -> dict:
-    signals, warnings = [], []
+def _unq(s) -> str:
+    """Normalize an hcl2 token: strip ${...} interpolation wrappers and any
+    surrounding double quotes. python-hcl2 < 5 strips quotes itself; >= 5 keeps
+    them on keys and values — this makes the parser tolerant of both."""
+    s = str(s)
+    if s.startswith("${") and s.endswith("}"):
+        s = s[2:-1]
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        s = s[1:-1]
+    return s
 
-    # Account & OU names. Skip for_each-generated blocks (templated names like
-    # "${each.key}") — the synth expansion below materializes those from the
-    # locals lists; keeping them here would pollute the account set.
+
+def _strip_interp(s: str) -> str:
+    return _unq(s)
+
+
+def _as_str_list(v) -> list:
+    if isinstance(v, list):
+        out = [_unq(x) for x in v]
+        return [x for x in out if "${" not in x and "each." not in x]
+    if isinstance(v, str):
+        return re.findall(r'"([^"]+)"', v)
+    return []
+
+
+def _empty_norm() -> dict:
+    return dict(account_names=[], ou_names=[], scp_names=[], wl_from_local=[],
+                envs_from_local=[], per_env=False, per_wl=False, per_env_only=False,
+                region_list=[], feature_all=False, principals=set())
+
+
+def _norm_from_hcl2(text: str) -> dict:
+    import hcl2  # raises ImportError if not installed
+    try:
+        parsed = hcl2.loads(text)
+    except AttributeError:  # older API
+        import io
+        parsed = hcl2.load(io.StringIO(text))
+
+    resources = parsed.get("resource", []) or []
+
+    def iter_res(rtype):
+        for block in resources:
+            if not isinstance(block, dict):
+                continue
+            for rtype_key, body in block.items():
+                if _unq(rtype_key) != rtype or not isinstance(body, dict):
+                    continue
+                for label_key, attrs in body.items():
+                    yield _unq(label_key), (attrs or {})
+
+    n = _empty_norm()
+    for label, attrs in iter_res("aws_organizations_account"):
+        fe = attrs.get("for_each")
+        if fe is not None:
+            s = str(fe)
+            if "setproduct" in s:
+                n["per_env"] = True
+            elif "local.workloads" in s:
+                n["per_wl"] = True
+            elif "local.environments" in s:
+                n["per_env_only"] = True
+            continue  # generated accounts are materialized from locals below
+        nm = _unq(attrs.get("name", "")) if attrs.get("name") is not None else ""
+        if nm and "${" not in nm and "each." not in nm:
+            n["account_names"].append(nm)
+        elif "${" not in label:
+            n["account_names"].append(label.replace("_", "-"))
+
+    for _label, attrs in iter_res("aws_organizations_organizational_unit"):
+        nm = attrs.get("name")
+        if nm is not None:
+            n["ou_names"].append(_unq(nm))
+
+    for label, attrs in iter_res("aws_organizations_policy"):
+        nm = attrs.get("name")
+        n["scp_names"].append(_unq(nm) if nm is not None else label)
+
+    for _label, attrs in iter_res("aws_organizations_organization"):
+        if _unq(attrs.get("feature_set", "")) == "ALL":
+            n["feature_all"] = True
+        sp = attrs.get("aws_service_access_principals")
+        if isinstance(sp, list):
+            n["principals"] |= {_unq(x) for x in sp}
+
+    locals_map = {}
+    for block in parsed.get("locals", []) or []:
+        if isinstance(block, dict):
+            for k, v in block.items():
+                locals_map[_unq(k)] = v
+    n["wl_from_local"] = _as_str_list(locals_map.get("workloads"))
+    n["envs_from_local"] = _as_str_list(locals_map.get("environments"))
+    n["region_list"] = _as_str_list(locals_map.get("approved_regions"))
+
+    # Supplement structural flags with reliable substring hints — the for_each
+    # may reference an intermediate local (e.g. setproduct lives in a separate
+    # locals block, not on the account resource).
+    n["per_env"] = n["per_env"] or "setproduct(local.workloads" in text
+    n["per_wl"] = n["per_wl"] or "toset(local.workloads)" in text
+    n["per_env_only"] = n["per_env_only"] or "toset(local.environments)" in text
+    return n
+
+
+def _norm_from_regex(text: str) -> dict:
+    n = _empty_norm()
     acct_blocks = re.findall(r'resource\s+"aws_organizations_account"\s+"([^"]+)"\s*{([^}]*)}',
                              text, re.DOTALL)
-    account_names = []
     for label, body in acct_blocks:
         if "for_each" in body or "each." in body:
             continue
         m = re.search(r'name\s*=\s*"([^"$]+)"', body)
         if m:
-            account_names.append(m.group(1))
+            n["account_names"].append(m.group(1))
         elif "${" not in label:
-            account_names.append(label.replace("_", "-"))
+            n["account_names"].append(label.replace("_", "-"))
 
-    ou_names = re.findall(r'resource\s+"aws_organizations_organizational_unit"\s+"[^"]+"\s*{[^}]*?name\s*=\s*"([^"]+)"',
-                          text, re.DOTALL)
+    n["ou_names"] = re.findall(
+        r'resource\s+"aws_organizations_organizational_unit"\s+"[^"]+"\s*{[^}]*?name\s*=\s*"([^"]+)"',
+        text, re.DOTALL)
+    n["scp_names"] = re.findall(r'resource\s+"aws_organizations_policy"\s+"([^"]+)"', text)
 
-    # for_each-generated workloads: parse locals lists
     workloads_local = re.search(r'workloads\s*=\s*\[([^\]]*)\]', text)
     envs_local = re.search(r'environments\s*=\s*\[([^\]]*)\]', text)
-    wl_from_local = re.findall(r'"([^"]+)"', workloads_local.group(1)) if workloads_local else []
-    envs_from_local = re.findall(r'"([^"]+)"', envs_local.group(1)) if envs_local else []
+    n["wl_from_local"] = re.findall(r'"([^"]+)"', workloads_local.group(1)) if workloads_local else []
+    n["envs_from_local"] = re.findall(r'"([^"]+)"', envs_local.group(1)) if envs_local else []
+    n["per_env"] = "setproduct(local.workloads" in text
+    n["per_wl"] = "toset(local.workloads)" in text
+    n["per_env_only"] = "toset(local.environments)" in text
+    n["feature_all"] = bool(re.search(r'feature_set\s*=\s*"ALL"', text))
+    regions = re.findall(r'approved_regions\s*=\s*\[([^\]]*)\]', text)
+    n["region_list"] = re.findall(r'"([^"]+)"', regions[0]) if regions else []
+    return n
 
-    # Strategy hints from for_each patterns
-    per_env = "setproduct(local.workloads" in text
-    per_wl = "toset(local.workloads)" in text
-    per_env_only = "toset(local.environments)" in text
 
-    # Synthesize an account list for the structural inference. Only materialize
-    # workload accounts for the for_each pattern that is actually declared — the
-    # `workloads` local is emitted even when no workload accounts are created.
-    synth_accounts = [{"Name": n, "Id": str(i)} for i, n in enumerate(account_names)]
+def _parse_terraform(text: str) -> dict:
+    parser = "python-hcl2"
+    try:
+        norm = _norm_from_hcl2(text)
+    except Exception:  # ImportError or any parse error -> regex safety net
+        norm = _norm_from_regex(text)
+        parser = "regex"
+    return _build_tf_result(norm, text, parser)
+
+
+def _build_tf_result(norm: dict, text: str, parser: str) -> dict:
+    signals, warnings = [], []
+
+    # Materialize workload accounts for the declared for_each pattern only.
+    synth_accounts = [{"Name": n, "Id": str(i)} for i, n in enumerate(norm["account_names"])]
     base = len(synth_accounts)
-    if per_env and wl_from_local and envs_from_local:
-        for w in wl_from_local:
-            for e in envs_from_local:
+    if norm["per_env"] and norm["wl_from_local"] and norm["envs_from_local"]:
+        for w in norm["wl_from_local"]:
+            for e in norm["envs_from_local"]:
                 synth_accounts.append({"Name": f"{w}-{e}", "Id": str(base)}); base += 1
-    elif per_wl and wl_from_local:
-        for w in wl_from_local:
+    elif norm["per_wl"] and norm["wl_from_local"]:
+        for w in norm["wl_from_local"]:
             synth_accounts.append({"Name": w, "Id": str(base)}); base += 1
-    elif per_env_only and envs_from_local:
-        for e in envs_from_local:
+    elif norm["per_env_only"] and norm["envs_from_local"]:
+        for e in norm["envs_from_local"]:
             synth_accounts.append({"Name": f"workloads-{e}", "Id": str(base)}); base += 1
 
-    feature_all = bool(re.search(r'feature_set\s*=\s*"ALL"', text))
-    svc = {k: hint in text for k, hint in _SERVICE_HINTS.items()}
+    # service detection: precise (hcl2 principals) ∪ textual fallback
+    principals = norm.get("principals", set())
+    svc = {k: (hint in principals) or (hint in text) for k, hint in _SERVICE_HINTS.items()}
 
-    # SCPs
-    scp_blocks = re.findall(r'resource\s+"aws_organizations_policy"\s+"([^"]+)"', text)
     guardrail_hits = []
     for key, needle in (("Region restriction", "RequestedRegion"),
                         ("Deny leave org", "LeaveOrganization"),
@@ -136,14 +253,15 @@ def _parse_terraform(text: str) -> dict:
         if needle.lower() in text.lower():
             guardrail_hits.append(key)
 
-    # Identity & governance
     has_iam_users = bool(re.search(r'resource\s+"aws_iam_user"', text))
     has_ct = bool(re.search(r'resource\s+"aws_controltower', text)) or "controltower" in text.lower()
 
-    _sig(signals, "AWS Organizations (ALL features)", feature_all,
-         "feature_set = ALL" if feature_all else "feature_set not ALL/!found", "High")
-    _sig(signals, f"OU structure ({len(ou_names)} OUs)", len(ou_names) >= 3,
-         ", ".join(ou_names[:8]) or "none parsed", "High")
+    _sig(signals, "Parser", True, f"parsed with {parser}",
+         "Confirmed" if parser == "python-hcl2" else "High")
+    _sig(signals, "AWS Organizations (ALL features)", norm["feature_all"],
+         "feature_set = ALL" if norm["feature_all"] else "feature_set not ALL / not found", "High")
+    _sig(signals, f"OU structure ({len(norm['ou_names'])} OUs)", len(norm["ou_names"]) >= 3,
+         ", ".join(norm["ou_names"][:8]) or "none parsed", "High")
     _sig(signals, f"Accounts declared ({len(synth_accounts)})", len(synth_accounts) > 1,
          ", ".join(a["Name"] for a in synth_accounts[:6]) or "none", "Medium")
     for label, key in (("GuardDuty trusted access", "guardduty"),
@@ -153,8 +271,8 @@ def _parse_terraform(text: str) -> dict:
                        ("IAM Identity Center", "sso"),
                        ("AWS Backup trusted access", "backup")):
         _sig(signals, label, svc[key], f"{_SERVICE_HINTS[key]} present" if svc[key] else "not referenced", "High")
-    _sig(signals, f"Service Control Policies ({len(scp_blocks)})", len(scp_blocks) > 0,
-         ", ".join(guardrail_hits[:6]) or (", ".join(scp_blocks[:4]) or "none"), "High")
+    _sig(signals, f"Service Control Policies ({len(norm['scp_names'])})", len(norm["scp_names"]) > 0,
+         ", ".join(guardrail_hits[:6]) or (", ".join(norm["scp_names"][:4]) or "none"), "High")
     _sig(signals, "IAM users present (anti-pattern)", has_iam_users,
          "aws_iam_user resource found" if has_iam_users else "none", "High")
 
@@ -166,30 +284,28 @@ def _parse_terraform(text: str) -> dict:
                           or a["Name"].lower() in ("log-archive", "logarchive") for a in synth_accounts)
     governance = ("AWS Control Tower" if has_ct
                   else "Landing Zone Accelerator (LZA)" if "lza" in text.lower()
-                  else "Custom (Organizations + SCPs)" if (scp_blocks or ou_names) else "None (single account, no org)")
-
-    regions = re.findall(r'approved_regions\s*=\s*\[([^\]]*)\]', text)
-    region_list = re.findall(r'"([^"]+)"', regions[0]) if regions else []
+                  else "Custom (Organizations + SCPs)" if (norm["scp_names"] or norm["ou_names"])
+                  else "None (single account, no org)")
 
     mapped = LZDesign(
         org_size="Enterprise" if len(synth_accounts) > 40 else "Mid-market" if len(synth_accounts) > 12
         else "SMB" if len(synth_accounts) > 3 else "Startup",
         compliance=[],
         num_teams=max(1, len(synth_accounts) // 6),
-        num_workloads=max(1, len(wl_from_local) or max(1, len(synth_accounts) - 5)),
-        environments=envs_from_local or ["dev", "test", "prod"],
-        regions=region_list or ["us-east-1"],
+        num_workloads=max(1, len(norm["wl_from_local"]) or max(1, len(synth_accounts) - 5)),
+        environments=norm["envs_from_local"] or ["dev", "test", "prod"],
+        regions=norm["region_list"] or ["us-east-1"],
         account_strategy=strategy,
         network_pattern="Transit Gateway hub-and-spoke",  # not reliably detectable from org TF
         identity_model="IAM users per account" if has_iam_users and not svc["sso"]
-        else "IAM Identity Center (SSO)" if svc["sso"] else "IAM Identity Center (SSO)",
+        else "IAM Identity Center (SSO)",
         governance=governance,
         centralized_logging=has_log_archive and svc["cloudtrail"],
         security_tooling=svc["guardduty"] and svc["config"],
         backup_dr=svc["backup"],
     )
     return {"signals": signals, "mapped_design": mapped, "warnings": warnings,
-            "guardrails": guardrail_hits,
+            "guardrails": guardrail_hits, "parser": parser,
             "undetectable": ["network pattern", "compliance frameworks", "right-sizing"]}
 
 

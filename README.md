@@ -47,7 +47,8 @@ and cost impact. Then get an opinionated review from **Claude** (or OpenAI).
   Analyzer), with a confidence-rated signal table — then load it as your design.
 - **📈 Drift & history** — capture point-in-time **target** and **actual** snapshots,
   chart the Well-Architected trajectory over time, and see the per-pillar
-  target-vs-actual gap. Durable via SQLite.
+  target-vs-actual gap. Durable via SQLite. Actuals can be collected
+  **automatically on a schedule** (see *Scheduled drift collection* below).
 - **🔗 Share & collaborate** — generate a shareable link that encodes the whole
   design in the URL (`?d=<token>`, no server state), and leave **comments** on
   saved scenarios.
@@ -121,8 +122,9 @@ streamlit run app.py
 | `maturity.py` | Maturity levels, next-best-action, and peer benchmark profiles |
 | `interactive_diagrams.py` | Clickable streamlit-agraph org graph with node drill-down |
 | `wizard.py` | Guided 3-step onboarding setup flow |
-| `iac_import.py` | Reverse mode — parse Terraform/LZA/CloudFormation → scored design |
+| `iac_import.py` | Reverse mode — parse Terraform (python-hcl2 + regex fallback) / LZA / CloudFormation → scored design |
 | `sharing.py` | Encode/decode a design to a URL-safe shareable token |
+| `drift_collector.py` | Headless CLI — scheduled read-only scan → 'actual' drift snapshot |
 | `waf.py` | Well-Architected alignment engine — 25 weighted checks, each mapped to the closest official WAF best practice (`exact`/`adapted`) |
 | `diagrams.py` | Graphviz builders for org structure + network topology |
 | `llm.py` | Provider layer: Claude (Anthropic SDK, streaming) + OpenAI fallback |
@@ -131,6 +133,31 @@ streamlit run app.py
 | `iac.py` | IaC exporters: Terraform / LZA config / Control Tower checklist |
 | `roadmap.py` | Day 0/1/2 phased implementation plan + Gantt |
 | `live_aws.py` | Read-only AWS Organizations scanner + estate→design mapping |
+
+## Scheduled drift collection
+
+`drift_collector.py` is a headless CLI that runs the read-only AWS Organizations
+scan and writes an **actual** snapshot to the shared store — so the Drift tab
+fills in automatically. Point it at the **same** database as the app via
+`LZ_DB_PATH`, and give it read-only credentials (explicit keys, `AWS_*` env vars,
+or — recommended — an attached EC2/ECS instance role via the default boto3 chain).
+
+```bash
+# one-off
+LZ_DB_PATH=/data/lz_scenarios.db python drift_collector.py --user operator --region us-east-1 --label nightly
+
+# cron (02:00 daily)
+0 2 * * *  cd /opt/landing-zone-studio && LZ_DB_PATH=/data/lz_scenarios.db \
+  python drift_collector.py --user operator --region us-east-1
+```
+
+On Windows use Task Scheduler; in CI use a scheduled GitHub Action with the repo's
+OIDC role. IAM permissions are the read-only set listed in the Live Estate tab
+(Organizations `List*`/`Describe*` + `controltower:ListLandingZones`/`GetLandingZone`).
+
+> Reverse-mode IaC parsing prefers **python-hcl2** for robust real-world Terraform
+> and automatically falls back to a dependency-free regex parser if it's missing or
+> a file fails to parse (the signal table shows which parser ran).
 
 ## Persistence & configuration
 

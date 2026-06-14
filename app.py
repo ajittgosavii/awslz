@@ -5,6 +5,7 @@ Deploy:        Streamlit Community Cloud (see README.md)
 """
 
 import copy
+import html
 import json
 
 import pandas as pd
@@ -727,10 +728,24 @@ with tab_drift:
             st.session_state._flash = f"Saved actual snapshot '{snap_label}'"
             st.rerun()
 
+        with st.expander("⏱️ Automate 'actual' snapshots (scheduled collector)"):
+            st.caption("Run the read-only collector on a schedule (cron / Task Scheduler / CI) "
+                       "to record actuals automatically — they appear here with no manual step. "
+                       "Point it at the **same** database via `LZ_DB_PATH`.")
+            st.code(
+                f"# nightly, using an instance role or AWS_* env vars\n"
+                f"LZ_DB_PATH=/path/to/lz_scenarios.db \\\n"
+                f"  python drift_collector.py --user {_user} --region us-east-1 --label nightly\n\n"
+                f"# crontab: 02:00 every day\n"
+                f"0 2 * * *  cd /opt/landing-zone-studio && LZ_DB_PATH=/data/lz_scenarios.db "
+                f"python drift_collector.py --user {_user} --region us-east-1",
+                language="bash")
+
         snaps = store.load_snapshots(_user)
         if not snaps:
             st.info("No snapshots yet. Save the current design as a **target**, then evolve it "
-                    "(or load a live scan as your working design) and save **actuals** to see drift.")
+                    "(or load a live scan as your working design) and save **actuals** to see drift. "
+                    "Or automate actuals with the scheduled collector above.")
         else:
             hist_df = pd.DataFrame([{
                 "When": s["ts"][:16].replace("T", " "), "Label": s["label"],
@@ -834,10 +849,12 @@ with tab_scen:
             st.markdown(f"**💬 Comments on '{pick}'**")
             _comments = store.load_comments(pick)
             for cm in _comments:
+                # author/text are user-controlled — escape before raw-HTML render
+                _meta = f"{cm['ts'][:16].replace('T', ' ')} · {html.escape(cm['author'])}"
                 st.markdown(
-                    f"<span style='color:#8C9CB8;font-size:.72rem'>"
-                    f"{cm['ts'][:16].replace('T', ' ')} · {cm['author']}</span>  \n{cm['text']}",
+                    f"<span style='color:#8C9CB8;font-size:.72rem'>{_meta}</span>",
                     unsafe_allow_html=True)
+                st.text(cm["text"])
             if not _comments:
                 st.caption("No comments yet — start the thread.")
             nc1, nc2 = st.columns([3, 1])

@@ -25,16 +25,24 @@ READONLY_CALLS = [
 def scan_organization(access_key: str, secret_key: str, session_token: str | None,
                       region: str) -> dict:
     """Scan the org. Returns {ok, error?, org, accounts, ous, policies, services,
-    delegated, signals, mapped_design}."""
+    delegated, signals, mapped_design}.
+
+    If ``access_key`` is empty, the default boto3 credential chain is used
+    (environment, shared config/profile, or an EC2/ECS instance role) — this is
+    what the headless drift collector relies on.
+    """
     import boto3
     from botocore.config import Config
 
-    session = boto3.Session(
-        aws_access_key_id=access_key.strip(),
-        aws_secret_access_key=secret_key.strip(),
-        aws_session_token=(session_token or "").strip() or None,
-        region_name=region,
-    )
+    if (access_key or "").strip():
+        session = boto3.Session(
+            aws_access_key_id=access_key.strip(),
+            aws_secret_access_key=secret_key.strip(),
+            aws_session_token=(session_token or "").strip() or None,
+            region_name=region,
+        )
+    else:
+        session = boto3.Session(region_name=region)  # default credential chain
     cfg = Config(retries={"max_attempts": 2}, connect_timeout=8, read_timeout=15)
     org = session.client("organizations", config=cfg)
     result = {"ok": False, "warnings": []}
