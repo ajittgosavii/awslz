@@ -14,6 +14,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import fixes
+import guide
 import iac
 import llm
 import maturity
@@ -120,6 +121,7 @@ design: LZDesign = st.session_state.design
 with st.sidebar:
     ui.sidebar_brand()
     st.caption("Design, simulate, and stress-test AWS multi-account landing zones.")
+    st.caption("🆕 New here? Open the **📖 Guide** tab for a quick walkthrough.")
 
     st.header("1. Organization profile")
     design.org_size = st.selectbox("Organization size", ORG_SIZES, index=ORG_SIZES.index(design.org_size))
@@ -188,10 +190,13 @@ ui.hero(design, n_total, waf_overall, cost["total"])
 if st.session_state.get("_flash"):
     st.toast(st.session_state.pop("_flash"), icon="✅")
 
-(tab_design, tab_sim, tab_waf, tab_iac, tab_road, tab_live, tab_drift,
+(tab_design, tab_guide, tab_sim, tab_waf, tab_iac, tab_road, tab_live, tab_drift,
  tab_scen, tab_advisor, tab_ref) = st.tabs(
-    ["🎨 Design Studio", "🧪 Simulator", "🏛️ Well-Architected", "🚀 IaC",
+    ["🎨 Design Studio", "📖 Guide", "🧪 Simulator", "🏛️ Well-Architected", "🚀 IaC",
      "🗺️ Roadmap", "📡 Live Estate", "📈 Drift", "🗂️ Scenarios", "🤖 AI Advisor", "📚 Reference"])
+
+with tab_guide:
+    guide.render()
 
 # ============================== DESIGN STUDIO ==============================
 
