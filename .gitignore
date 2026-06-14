@@ -4,3 +4,6 @@ __pycache__/
 venv/
 .streamlit/secrets.toml
 .env
+lz_scenarios.db
+lz_scenarios.db-wal
+lz_scenarios.db-shm

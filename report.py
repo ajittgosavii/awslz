@@ -174,6 +174,15 @@ def build_pdf_report(design_dict: dict, scores: dict, cost: dict, n_total: int,
 
     # --- 3. WAF ---
     pdf.section(f"3. Well-Architected Alignment - Overall {waf_overall}/100")
+    pdf.set_font("Helvetica", "I", 7.5)
+    pdf.set_text_color(*MUTED)
+    pdf.multi_cell(0, 4, _tx(
+        "Indicative self-assessment. Check IDs are mapped to the closest official AWS "
+        "Well-Architected best practice; 'adapted' items are landing-zone interpretations, "
+        "not 1:1 official practices. Use the official Well-Architected Tool for audit evidence."),
+        new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(*INK)
+    pdf.ln(1)
     for pillar, data in assessment.items():
         pdf.score_bar(pillar, data["score"])
     pdf.ln(2)
@@ -209,6 +218,14 @@ def build_pdf_report(design_dict: dict, scores: dict, cost: dict, n_total: int,
 
     # --- 4. Cost ---
     pdf.section("4. Estimated Monthly Platform Cost")
+    pdf.set_font("Helvetica", "I", 7.5)
+    pdf.set_text_color(*MUTED)
+    pdf.multi_cell(0, 4, _tx(
+        f"Basis: {cost.get('price_source', 'sourced AWS list prices')} x stated usage assumptions, "
+        f"scaled by a region price index of {cost.get('region_index', 1)}x. Planning estimate - "
+        "verify with the AWS Pricing Calculator."), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(*INK)
+    pdf.ln(1)
     pdf.kv_table([(item, f"${val:,.0f} / month") for item, val in cost["items"].items()]
                  + [("TOTAL (estimate)", f"${cost['total']:,.0f} / month")])
 

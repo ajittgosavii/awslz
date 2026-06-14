@@ -7,6 +7,8 @@ real costs depend on usage, region, and negotiated pricing.
 
 from dataclasses import dataclass, field, asdict
 
+import pricing
+
 # ---------------------------------------------------------------------------
 # Design options
 # ---------------------------------------------------------------------------
@@ -15,7 +17,7 @@ ORG_SIZES = ["Startup", "SMB", "Mid-market", "Enterprise"]
 
 COMPLIANCE_FRAMEWORKS = [
     "PCI-DSS", "HIPAA", "SOC 2", "ISO 27001", "FedRAMP",
-    "APRA CPS 234", "GDPR", "NIST 800-53",
+    "APRA CPS 234", "GDPR", "NIST 800-53", "HITRUST", "CIS AWS Foundations",
 ]
 
 ACCOUNT_STRATEGIES = [
@@ -125,165 +127,276 @@ def _clamp(x):
     return max(0, min(100, round(x)))
 
 
-def score_design(d: LZDesign) -> dict:
-    n_env = max(1, len(d.environments))
+class _Dim:
+    """Accumulates a dimension score while recording every contributing factor.
+
+    This makes the scoring rubric fully auditable: ``factors`` is a list of
+    (label, delta) so the UI / LLM / report can explain *why* a score is what it
+    is, rather than presenting an opaque number.
+    """
+
+    def __init__(self, base_label: str, base: float):
+        self.value = float(base)
+        self.factors = [{"factor": base_label, "delta": round(float(base))}]
+
+    def add(self, label: str, delta: float):
+        if delta:
+            self.value += delta
+            self.factors.append({"factor": label, "delta": round(delta, 1)})
+        return self
+
+    def result(self):
+        return _clamp(self.value), self.factors
+
+
+HEAVY_COMPLIANCE = {"PCI-DSS", "HIPAA", "FedRAMP", "NIST 800-53", "APRA CPS 234"}
+
+
+def _score_with_breakdown(d: LZDesign):
+    """Compute all dimension scores AND a per-factor breakdown.
+
+    Numerically identical to the previous opaque model — the only change is that
+    every adjustment is now labelled and recorded.
+    """
     n_acct = total_accounts(d)
 
     # --- Security & blast radius ---
-    strategy_security = {
-        "Single account": 15,
-        "Account per environment": 55,
-        "Account per workload": 70,
-        "Account per workload per environment": 90,
-    }[d.account_strategy]
-    sec = strategy_security
+    sec = _Dim(f"Account strategy: {d.account_strategy}", {
+        "Single account": 15, "Account per environment": 55,
+        "Account per workload": 70, "Account per workload per environment": 90,
+    }[d.account_strategy])
     if d.security_tooling:
-        sec += 8
+        sec.add("Org-wide security tooling (GuardDuty/Security Hub/Config)", 8)
     if d.centralized_logging:
-        sec += 5
+        sec.add("Centralized logging (Log Archive)", 5)
     if d.identity_model == "IAM users per account":
-        sec -= 20
+        sec.add("IAM users (long-lived credentials)", -20)
     elif d.identity_model.startswith("External IdP"):
-        sec += 5
+        sec.add("External IdP federation", 5)
     if d.governance == "None (single account, no org)":
-        sec -= 25
+        sec.add("No organization / governance", -25)
 
     # --- Scalability ---
-    scal = {
-        "Single account": 10,
-        "Account per environment": 45,
-        "Account per workload": 75,
-        "Account per workload per environment": 88,
-    }[d.account_strategy]
+    scal = _Dim(f"Account strategy: {d.account_strategy}", {
+        "Single account": 10, "Account per environment": 45,
+        "Account per workload": 75, "Account per workload per environment": 88,
+    }[d.account_strategy])
     if d.network_pattern == "Flat VPC peering":
-        # peering meshes collapse beyond ~10 VPCs
-        scal -= min(40, n_acct * 2)
+        scal.add(f"Flat peering mesh collapses with scale ({n_acct} accts)", -min(40, n_acct * 2))
     elif d.network_pattern == "AWS Cloud WAN":
-        scal += 10
+        scal.add("Cloud WAN global segmentation", 10)
     elif d.network_pattern == "Centralized egress + TGW":
-        scal += 6
+        scal.add("Centralized egress + TGW", 6)
     else:
-        scal += 4
+        scal.add("Transit Gateway hub-and-spoke", 4)
     if d.governance in ("AWS Control Tower", "Landing Zone Accelerator (LZA)"):
-        scal += 8  # account vending automation
+        scal.add("Automated account vending", 8)
 
     # --- Operational simplicity (higher = easier to run) ---
-    ops = 95 - min(70, n_acct * 1.2)
+    ops = _Dim(f"Fleet size penalty ({n_acct} accounts)", 95 - min(70, n_acct * 1.2))
     if d.governance == "AWS Control Tower":
-        ops += 22
+        ops.add("Control Tower managed baselines", 22)
     elif d.governance == "Landing Zone Accelerator (LZA)":
-        ops += 15
+        ops.add("LZA config-driven baselines", 15)
     elif d.governance == "Custom (Organizations + SCPs)":
-        ops += 5
+        ops.add("Custom org (self-managed)", 5)
     if d.identity_model == "IAM users per account":
-        ops -= 15
+        ops.add("Per-account IAM user sprawl", -15)
     if len(d.regions) > 2:
-        ops -= (len(d.regions) - 2) * 4
+        ops.add(f"Multi-region operations ({len(d.regions)} regions)", -(len(d.regions) - 2) * 4)
     if d.network_pattern == "Flat VPC peering" and n_acct > 8:
-        ops -= 15
+        ops.add("Peering mesh management overhead", -15)
 
     # --- Cost efficiency ---
-    cost_eff = 80
     overhead = estimate_monthly_cost(d)["total"]
     workload_proxy = max(1, d.num_workloads) * 400  # assumed workload spend proxy
     ratio = overhead / (overhead + workload_proxy)
-    cost_eff = 100 - ratio * 160
+    cost_eff = _Dim(f"Platform overhead is ~{ratio:.0%} of modeled total spend", 100 - ratio * 160)
     if d.account_strategy == "Single account":
-        cost_eff += 10  # least platform overhead (but worst everything else)
+        cost_eff.add("Single account = least platform overhead", 10)
 
     # --- Compliance readiness ---
-    comp = 30
+    comp = _Dim("Baseline", 30)
     if d.centralized_logging:
-        comp += 20
+        comp.add("Centralized, immutable logging", 20)
     if d.security_tooling:
-        comp += 15
+        comp.add("Org-wide threat detection", 15)
     if d.account_strategy != "Single account":
-        comp += 15
+        comp.add("Account-level isolation", 15)
     if d.governance in ("AWS Control Tower", "Landing Zone Accelerator (LZA)"):
-        comp += 15
+        comp.add("Managed controls / control catalog", 15)
     if d.identity_model != "IAM users per account":
-        comp += 5
-    heavy = {"PCI-DSS", "HIPAA", "FedRAMP", "NIST 800-53", "APRA CPS 234"}
-    if heavy & set(d.compliance):
-        # heavy frameworks penalize weak isolation hard
+        comp.add("Federated identity", 5)
+    if HEAVY_COMPLIANCE & set(d.compliance):
         if d.account_strategy == "Single account":
-            comp -= 30
+            comp.add("Regulated workload in a single account", -30)
         if not d.centralized_logging:
-            comp -= 15
+            comp.add("Regulated workload without central logging", -15)
         if d.governance == "None (single account, no org)":
-            comp -= 20
+            comp.add("Regulated workload without an organization", -20)
 
-    return {
-        "Security & Blast Radius": _clamp(sec),
-        "Scalability": _clamp(scal),
-        "Operational Simplicity": _clamp(ops),
-        "Cost Efficiency": _clamp(cost_eff),
-        "Compliance Readiness": _clamp(comp),
+    dims = {
+        "Security & Blast Radius": sec, "Scalability": scal,
+        "Operational Simplicity": ops, "Cost Efficiency": cost_eff,
+        "Compliance Readiness": comp,
     }
+    scores = {name: dim.result()[0] for name, dim in dims.items()}
+    breakdown = {name: dim.result()[1] for name, dim in dims.items()}
+    return scores, breakdown
+
+
+def score_design(d: LZDesign) -> dict:
+    """Return the 0-100 score per design dimension (see explain_scores for why)."""
+    return _score_with_breakdown(d)[0]
+
+
+def explain_scores(d: LZDesign) -> dict:
+    """Return {dimension: [{factor, delta}, ...]} — the auditable rubric trace."""
+    return _score_with_breakdown(d)[1]
 
 
 # ---------------------------------------------------------------------------
-# Cost model (rough monthly USD estimates — demo purposes)
+# Cost model — derived from sourced list prices x stated usage assumptions.
+#
+# Every line item is computed as (published list price) x (assumed usage) so the
+# number is traceable, not asserted. See pricing.py for the prices and their
+# sources, and the "basis" returned below for the per-item derivation. Pass
+# live_prices (from pricing.fetch_live_prices) to override the clean hourly SKUs
+# with the caller's real, current regional prices.
 # ---------------------------------------------------------------------------
 
-# Relative price index vs us-east-1 (rough, demo purposes)
-REGION_PRICE_INDEX = {
-    "us-east-1": 1.00, "us-west-2": 1.00, "eu-west-1": 1.05, "eu-central-1": 1.09,
-    "ap-southeast-1": 1.10, "ap-southeast-2": 1.12, "ap-south-1": 1.02, "sa-east-1": 1.35,
-}
-
-UNIT_COSTS = {
-    "guardduty_per_account": 25.0,
-    "securityhub_per_account": 12.0,
-    "config_per_account": 18.0,
-    "cloudtrail_org_extra_copies": 2.0,   # first management-event copy free
-    "tgw_attachment": 36.5,                # per VPC attachment per month
-    "tgw_data_per_acct": 10.0,             # nominal data processing
-    "nat_gateway": 32.4,                   # per NAT GW month (excl. data)
-    "cloudwan_core_edge": 250.0,           # per region edge
-    "identity_center": 0.0,
-    "control_tower": 0.0,                  # CT itself free; underlying services billed
-}
+# Back-compat re-export (moved to pricing.py).
+REGION_PRICE_INDEX = pricing.REGION_PRICE_INDEX
+HOURS_PER_MONTH = pricing.HOURS_PER_MONTH
 
 
-def estimate_monthly_cost(d: LZDesign) -> dict:
+def estimate_monthly_cost(d: LZDesign, live_prices: dict | None = None) -> dict:
+    """Estimate monthly platform overhead with a traceable derivation.
+
+    Returns {items, total, region_index, basis, price_source}. ``basis`` lists,
+    per line item, the human-readable formula and the AWS price source so any
+    figure can be checked and tuned.
+    """
+    lpx = live_prices or {}
+
+    def price(key: str) -> float:
+        return lpx.get(key, pricing.lp(key))
+
+    def src(key: str) -> str:
+        s = pricing.LIST_PRICES[key]["source"]
+        return ("LIVE Price List API — " if key in lpx else "") + s
+
     n_acct = max(1, total_accounts(d))
     n_region = max(1, len(d.regions))
-    items = {}
+    n_wl = max(1, workload_account_count(d))
+    hpm = pricing.HOURS_PER_MONTH
 
+    items: dict[str, float] = {}
+    basis: list[dict] = []
+
+    def add(label: str, amount: float, formula: str, source: str):
+        items[label] = items.get(label, 0.0) + amount
+        basis.append({"item": label, "monthly": round(amount, 2),
+                      "formula": formula, "source": source})
+
+    # -- Security tooling (usage-derived per account x region) --
     if d.security_tooling:
-        items["GuardDuty (org-wide)"] = UNIT_COSTS["guardduty_per_account"] * n_acct * n_region
-        items["Security Hub"] = UNIT_COSTS["securityhub_per_account"] * n_acct * n_region
-    items["AWS Config (rules + recorder)"] = UNIT_COSTS["config_per_account"] * n_acct * n_region
-    if d.centralized_logging:
-        items["CloudTrail extra copies + S3 log archive"] = 40 + UNIT_COSTS["cloudtrail_org_extra_copies"] * n_acct
+        gd = (pricing.ua("guardduty_cloudtrail_events_million_per_acct") * price("guardduty_cloudtrail_million")
+              + pricing.ua("guardduty_flowlog_gb_per_acct") * price("guardduty_flowlogs_gb"))
+        add("GuardDuty (org-wide)", gd * n_acct * n_region,
+            f"({pricing.ua('guardduty_cloudtrail_events_million_per_acct')}M evt x ${price('guardduty_cloudtrail_million')} "
+            f"+ {pricing.ua('guardduty_flowlog_gb_per_acct')}GB x ${price('guardduty_flowlogs_gb')}) "
+            f"x {n_acct} acct x {n_region} region",
+            src("guardduty_cloudtrail_million"))
+        sh = pricing.ua("securityhub_checks_per_acct") * price("securityhub_check_thousand")
+        add("Security Hub", sh * n_acct * n_region,
+            f"{pricing.ua('securityhub_checks_per_acct'):,} checks x ${price('securityhub_check_thousand')} "
+            f"x {n_acct} acct x {n_region} region",
+            src("securityhub_check_thousand"))
 
-    # Networking
+    cfg = (pricing.ua("config_items_per_acct") * price("config_item")
+           + pricing.ua("config_rule_evals_per_acct") * price("config_rule_eval"))
+    add("AWS Config (recorder + rules)", cfg * n_acct * n_region,
+        f"({pricing.ua('config_items_per_acct'):,} items x ${price('config_item')} "
+        f"+ {pricing.ua('config_rule_evals_per_acct'):,} evals x ${price('config_rule_eval')}) "
+        f"x {n_acct} acct x {n_region} region",
+        src("config_item"))
+
+    if d.centralized_logging:
+        ct = pricing.ua("cloudtrail_extra_events_100k_per_acct") * price("cloudtrail_extra_copy_100k") * n_acct
+        s3 = pricing.ua("log_archive_gb") * price("s3_standard_gb")
+        add("CloudTrail extra copies + S3 log archive", ct + s3,
+            f"{pricing.ua('cloudtrail_extra_events_100k_per_acct')}x100k evt x ${price('cloudtrail_extra_copy_100k')} "
+            f"x {n_acct} acct + {pricing.ua('log_archive_gb')}GB x ${price('s3_standard_gb')}",
+            src("cloudtrail_extra_copy_100k"))
+
+    # -- Networking (hourly SKUs x 730 + data processing) --
+    nat_mo = price("nat_gateway_hour") * hpm
     if d.network_pattern in ("Transit Gateway hub-and-spoke", "Centralized egress + TGW"):
-        vpcs = min(n_acct, workload_account_count(d) + 2)
-        items["Transit Gateway attachments"] = UNIT_COSTS["tgw_attachment"] * vpcs * n_region
-        items["TGW data processing (nominal)"] = UNIT_COSTS["tgw_data_per_acct"] * vpcs
-        if d.network_pattern == "Centralized egress + TGW":
-            items["Centralized NAT gateways"] = UNIT_COSTS["nat_gateway"] * 2 * n_region
-        else:
-            items["Distributed NAT gateways"] = UNIT_COSTS["nat_gateway"] * min(vpcs, 6) * n_region
+        vpcs = min(n_acct, n_wl + 2)
+        add("Transit Gateway attachments", price("tgw_attachment_hour") * hpm * vpcs * n_region,
+            f"${price('tgw_attachment_hour')}/hr x {hpm}h x {vpcs} VPC x {n_region} region",
+            src("tgw_attachment_hour"))
+        add("TGW data processing", pricing.ua("tgw_processed_gb_per_vpc") * price("tgw_data_gb") * vpcs,
+            f"{pricing.ua('tgw_processed_gb_per_vpc')}GB x ${price('tgw_data_gb')} x {vpcs} VPC",
+            src("tgw_data_gb"))
+        n_nat = 2 if d.network_pattern == "Centralized egress + TGW" else min(vpcs, 6)
+        nat_label = "Centralized NAT gateways" if n_nat == 2 else "Distributed NAT gateways"
+        add(nat_label, nat_mo * n_nat * n_region,
+            f"${price('nat_gateway_hour')}/hr x {hpm}h x {n_nat} GW x {n_region} region",
+            src("nat_gateway_hour"))
+        nat_gb = (pricing.ua("nat_processed_gb_per_vpc") * price("nat_gateway_gb")
+                  * (n_nat if d.network_pattern == "Centralized egress + TGW" else vpcs) * n_region)
+        add("NAT data processing", nat_gb,
+            f"{pricing.ua('nat_processed_gb_per_vpc')}GB x ${price('nat_gateway_gb')} egress processed",
+            src("nat_gateway_gb"))
     elif d.network_pattern == "AWS Cloud WAN":
-        items["Cloud WAN core network edges"] = UNIT_COSTS["cloudwan_core_edge"] * n_region
-        items["Cloud WAN attachments"] = 36.5 * min(n_acct, workload_account_count(d) + 2)
+        add("Cloud WAN core network edges", price("cloudwan_core_edge_hour") * hpm * n_region,
+            f"${price('cloudwan_core_edge_hour')}/hr x {hpm}h x {n_region} region",
+            src("cloudwan_core_edge_hour"))
+        att = min(n_acct, n_wl + 2)
+        add("Cloud WAN attachments", price("cloudwan_attachment_hour") * hpm * att,
+            f"${price('cloudwan_attachment_hour')}/hr x {hpm}h x {att} attachment",
+            src("cloudwan_attachment_hour"))
+        add("Cloud WAN data processing", pricing.ua("tgw_processed_gb_per_vpc") * price("cloudwan_data_gb") * att,
+            f"{pricing.ua('tgw_processed_gb_per_vpc')}GB x ${price('cloudwan_data_gb')} x {att}",
+            src("cloudwan_data_gb"))
     else:  # flat peering
-        items["NAT gateways (per VPC)"] = UNIT_COSTS["nat_gateway"] * min(n_acct, 8) * n_region
-        items["VPC peering data (nominal)"] = 15.0 * min(n_acct, 10)
+        n_nat = min(n_acct, 8)
+        add("NAT gateways (per VPC)", nat_mo * n_nat * n_region,
+            f"${price('nat_gateway_hour')}/hr x {hpm}h x {n_nat} GW x {n_region} region",
+            src("nat_gateway_hour"))
+        add("NAT data processing", pricing.ua("nat_processed_gb_per_vpc") * price("nat_gateway_gb") * n_nat * n_region,
+            f"{pricing.ua('nat_processed_gb_per_vpc')}GB x ${price('nat_gateway_gb')} x {n_nat} VPC",
+            src("nat_gateway_gb"))
 
     if d.backup_dr:
-        items["AWS Backup + cross-region copies (nominal)"] = 60.0 * n_region
+        store = pricing.ua("backup_gb_per_workload") * n_wl * price("backup_gb")
+        add("AWS Backup (warm storage)", store,
+            f"{pricing.ua('backup_gb_per_workload')}GB x {n_wl} workload x ${price('backup_gb')}",
+            src("backup_gb"))
+        if n_region > 1:
+            xfer = pricing.ua("backup_gb_per_workload") * n_wl * price("interregion_transfer_gb") * (n_region - 1)
+            add("Cross-region backup copy (transfer)", xfer,
+                f"{pricing.ua('backup_gb_per_workload')}GB x {n_wl} x ${price('interregion_transfer_gb')} "
+                f"x {n_region - 1} extra region",
+                src("interregion_transfer_gb"))
 
-    # Region price index: scale by the average index of selected regions
-    idx = sum(REGION_PRICE_INDEX.get(r, 1.05) for r in d.regions) / n_region
+    # -- Regional price index (applied to the whole estimate) --
+    idx = pricing.region_index(d.regions)
     items = {k: v * idx for k, v in items.items()}
+    for b in basis:
+        b["monthly"] = round(b["monthly"] * idx, 2)
 
     total = round(sum(items.values()), 2)
-    return {"items": {k: round(v, 2) for k, v in items.items()}, "total": total,
-            "region_index": round(idx, 3)}
+    price_source = "live AWS Price List API (partial) + sourced list prices" if lpx else "sourced AWS list prices"
+    return {
+        "items": {k: round(v, 2) for k, v in items.items()},
+        "total": total,
+        "region_index": round(idx, 3),
+        "basis": basis,
+        "price_source": price_source,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -314,19 +427,42 @@ COMPLIANCE_SCPS = {
     ],
     "NIST 800-53": [
         ("Deny IMDSv1 instance launches", "ec2:RunInstances MetadataHttpTokens=required", "Workloads OU"),
+        ("Require EBS encryption by default", "Deny ec2:CreateVolume when Encrypted=false", "All OUs"),
+        ("Deny disabling Access Analyzer", "Deny access-analyzer:Delete* / Update*", "All OUs"),
+        ("Enforce S3 TLS-only access", "Deny s3:* when aws:SecureTransport=false", "All OUs"),
     ],
     "APRA CPS 234": [
         ("Data residency: restrict to AU regions", "Deny * outside ap-southeast-2/4", "All OUs"),
+        ("Deny disabling CloudTrail / Config", "cloudtrail:StopLogging, config:Stop*/Delete*", "All OUs"),
+        ("Require MFA for sensitive actions", "Deny when aws:MultiFactorAuthPresent=false", "Workloads OU"),
     ],
     "GDPR": [
         ("Data residency: restrict to EU regions", "Deny * outside eu-* regions", "Data OUs"),
+        ("Deny public S3 buckets (personal data)", "s3:PutBucketPublicAccessBlock enforcement", "Data OUs"),
+        ("Deny cross-region replication out of EU", "Deny s3:PutReplicationConfiguration to non-EU", "Data OUs"),
     ],
-    "HITRUST": [],
+    "HITRUST": [
+        ("Require encryption at rest (EBS/RDS/S3)", "Deny create when encryption disabled", "Workloads OU"),
+        ("Enforce centralized audit logging", "Deny cloudtrail:StopLogging / DeleteTrail", "All OUs"),
+        ("Restrict to approved, in-scope regions", "Deny * outside approved regions", "All OUs"),
+        ("Deny disabling threat detection", "guardduty:Delete*/Disable*, securityhub:Disable*", "All OUs"),
+    ],
+    "CIS AWS Foundations": [
+        ("Require IMDSv2 on instance launch", "ec2:RunInstances MetadataHttpTokens=required", "Workloads OU"),
+        ("Deny S3 public access", "Deny disabling s3:PutBucketPublicAccessBlock / account block", "All OUs"),
+        ("Deny security-group ingress 0.0.0.0/0 to 22/3389", "Deny ec2:AuthorizeSecurityGroupIngress on admin ports", "Workloads OU"),
+        ("Deny disabling default EBS encryption", "Deny ec2:DisableEbsEncryptionByDefault", "All OUs"),
+    ],
     "SOC 2": [
-        ("Deny disabling GuardDuty", "guardduty:Delete*/Disassociate*", "All OUs"),
+        ("Deny disabling GuardDuty", "guardduty:Delete*/Disassociate*/Disable*", "All OUs"),
+        ("Deny disabling Security Hub", "securityhub:DisableSecurityHub / Disassociate*", "All OUs"),
+        ("Deny CloudTrail / Config tampering", "cloudtrail:StopLogging, config:Stop*/Delete*", "All OUs"),
+        ("Protect the log archive bucket", "Deny s3:Delete* / PutBucketPolicy on log archive", "Security OU"),
     ],
     "ISO 27001": [
         ("Deny security service tampering", "securityhub:Disable*, access-analyzer:Delete*", "All OUs"),
+        ("Enforce encryption in transit", "Deny s3:* / es:* when aws:SecureTransport=false", "Workloads OU"),
+        ("Deny disabling AWS Config", "config:DeleteConfigurationRecorder / Stop*", "All OUs"),
     ],
 }
 

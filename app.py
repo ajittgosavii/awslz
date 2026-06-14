@@ -14,6 +14,7 @@ import streamlit as st
 import iac
 import llm
 import roadmap
+import store
 import ui
 import waf
 from diagrams import network_diagram, org_structure_diagram
@@ -21,7 +22,7 @@ from report import build_pdf_report
 from lz_core import (
     ACCOUNT_STRATEGIES, COMPLIANCE_FRAMEWORKS, ENVIRONMENTS, GOVERNANCE_TOOLING,
     IDENTITY_MODELS, NETWORK_PATTERNS, ORG_SIZES, REGIONS,
-    LZDesign, core_account_count, estimate_monthly_cost, recommend_design,
+    LZDesign, core_account_count, estimate_monthly_cost, explain_scores, recommend_design,
     recommend_guardrails, score_design, total_accounts, workload_account_count,
 )
 
@@ -47,8 +48,30 @@ if "chat" not in st.session_state:
 
 _user = st.session_state.get("lz_user", "operator")
 _scen_key = f"scenarios_{_user}"
+_PERSIST = store.available()  # SQLite-backed durability when the store is writable
 if _scen_key not in st.session_state:
-    st.session_state[_scen_key] = {}  # name -> design dict
+    st.session_state[_scen_key] = {}  # name -> design dict (session fallback)
+
+
+def _load_scenarios() -> dict:
+    """Saved scenarios for the current user — durable store if available."""
+    if _PERSIST:
+        return store.load_scenarios(_user)
+    return st.session_state[_scen_key]
+
+
+def _save_scenario(name: str, ddict: dict):
+    if _PERSIST:
+        store.save_scenario(_user, name, ddict)
+    else:
+        st.session_state[_scen_key][name] = ddict
+
+
+def _delete_scenario(name: str):
+    if _PERSIST:
+        store.delete_scenario(_user, name)
+    else:
+        st.session_state[_scen_key].pop(name, None)
 
 design: LZDesign = st.session_state.design
 
@@ -108,7 +131,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 scores = score_design(design)
-cost = estimate_monthly_cost(design)
+cost = estimate_monthly_cost(design, st.session_state.get("live_prices"))
 n_total = total_accounts(design)
 assessment = waf.assess(design)
 waf_overall = waf.overall_score(assessment)
@@ -157,6 +180,17 @@ with tab_design:
         )
         st.plotly_chart(fig, use_container_width=True)
 
+        with st.expander("📐 Why these scores? (auditable rubric)"):
+            breakdown = explain_scores(design)
+            for dim, factors in breakdown.items():
+                st.markdown(f"**{dim} — {scores[dim]}/100**")
+                bd = pd.DataFrame([{"Factor": f["factor"],
+                                    "Points": (f"+{f['delta']}" if f["delta"] >= 0 else str(f["delta"]))}
+                                   for f in factors])
+                st.dataframe(bd, use_container_width=True, hide_index=True)
+            st.caption("Scores are a transparent rubric for exploring trade-offs (each factor's "
+                       "weight is shown above), not an official AWS rating.")
+
     st.subheader("Recommended guardrails (SCPs)")
     guardrails = recommend_guardrails(design)
     st.dataframe(
@@ -165,10 +199,21 @@ with tab_design:
     )
 
     st.subheader("Estimated monthly platform cost breakdown")
-    st.caption("Rough demo estimates only — actuals depend on usage, data volumes, and region.")
+    st.caption(f"Basis: {cost['price_source']} × stated usage assumptions, scaled by a "
+               f"region price index of {cost['region_index']}×. Planning estimate — verify with "
+               "the AWS Pricing Calculator. See the derivation below.")
     cost_df = pd.DataFrame(
         [(k, v) for k, v in cost["items"].items()], columns=["Item", "USD / month"])
     st.dataframe(cost_df, use_container_width=True, hide_index=True)
+
+    with st.expander("🧾 How each number is derived (price × assumption × region index)"):
+        basis_df = pd.DataFrame([
+            {"Item": b["item"], "USD/mo": b["monthly"], "Formula": b["formula"],
+             "Price source": b["source"]} for b in cost["basis"]])
+        st.dataframe(basis_df, use_container_width=True, hide_index=True)
+        st.caption("Every figure traces to a published AWS list price and an explicit usage "
+                   "assumption (see pricing.py). Use the Live Estate tab to overlay real, current "
+                   "regional prices from the AWS Price List API.")
 
 # ================================ SIMULATOR ================================
 
@@ -262,6 +307,13 @@ with tab_waf:
     st.subheader("AWS Well-Architected Framework alignment")
     st.caption("Educational pillar-by-pillar assessment of the current design — "
                "not a substitute for an official Well-Architected Tool review.")
+    st.info(waf.WAF_DISCLAIMER, icon="ℹ️")
+    with st.expander("🔗 How Studio checks map to official WAF best practices"):
+        st.caption("‘≈ adapted’ = a landing-zone interpretation in that practice area, not a 1:1 "
+                   "official best practice. Validate with the official Well-Architected Tool before "
+                   "using as audit evidence.")
+        st.dataframe(pd.DataFrame(waf.mapping_table()), use_container_width=True, hide_index=True)
+        st.markdown(f"[Official AWS Well-Architected Framework]({waf.WAF_REFERENCE_URL})")
 
     w1, w2 = st.columns([1, 2])
     with w1:
@@ -309,8 +361,11 @@ with tab_waf:
     for pillar, data in assessment.items():
         with st.expander(f"{pillar} — {data['score']}/100", expanded=data["score"] < 55):
             for c in data["checks"]:
+                tag = "✓ exact" if c.get("match") == "exact" else "≈ adapted"
                 st.markdown(f"{icons[c['status']]} **{c['id']} — {c['title']}**  \n"
-                            f"{c['finding']}")
+                            f"{c['finding']}  \n"
+                            f"<span style='color:#8C9CB8;font-size:.8rem'>maps to {c.get('official','')} "
+                            f"· {tag}</span>", unsafe_allow_html=True)
                 if c["status"] != "pass":
                     st.markdown(f"> 💡 {c['remediation']}")
 
@@ -399,6 +454,9 @@ with tab_live:
         sk = lc2.text_input("Secret access key", type="password")
         tok = st.text_input("Session token (for temporary credentials)", type="password")
         reg = st.selectbox("Region for API calls", REGIONS, index=0)
+        want_prices = st.checkbox(
+            "Also overlay live AWS prices (Price List API — needs pricing:GetProducts)",
+            value=False)
         scan_now = st.form_submit_button("📡 Scan organization (read-only)")
 
     if scan_now:
@@ -406,8 +464,19 @@ with tab_live:
             st.error("Access key ID and secret access key are required.")
         else:
             import live_aws
+            import pricing
             with st.spinner("Scanning AWS Organizations…"):
                 st.session_state.live_scan = live_aws.scan_organization(ak, sk, tok, reg)
+            if want_prices:
+                with st.spinner("Fetching live prices from the AWS Price List API…"):
+                    lp = pricing.fetch_live_prices(ak, sk, tok, reg)
+                if lp.get("ok"):
+                    st.session_state.live_prices = lp["prices"]
+                    st.success(f"Live prices overlaid for {', '.join(lp['prices'])} "
+                               f"({reg}). All cost estimates now use them.", icon="💲")
+                else:
+                    st.warning("Live pricing unavailable: "
+                               + "; ".join(lp.get("errors", ["unknown error"])))
 
     scan = st.session_state.get("live_scan")
     if scan:
@@ -418,6 +487,19 @@ with tab_live:
             st.success(f"Organization **{scan['org']['Id']}** — "
                        f"{len(scan['accounts'])} accounts, {len(scan['ous'])} OUs, "
                        f"{len(scan['policies'])} SCPs", icon="✅")
+
+            ctd = scan.get("control_tower", {}) or {}
+            if ctd.get("confirmed"):
+                gr = ", ".join(ctd.get("governed_regions", []) or []) or "n/a"
+                st.success(
+                    f"**Control Tower confirmed via API** — status `{ctd.get('status')}`, "
+                    f"version `{ctd.get('version')}`, drift `{ctd.get('drift')}`, "
+                    f"governed regions: {gr}.", icon="🛡️")
+            else:
+                st.info(f"Control Tower not confirmed via API ({ctd.get('error', 'no landing zone')}). "
+                        "Governance below is inferred from org structure.", icon="ℹ️")
+            st.caption("Confidence column: **Confirmed** = authoritative API; "
+                       "**Inferred** = heuristic from names/structure.")
             for w in scan.get("warnings", []):
                 st.caption(f"⚠️ partial: {w}")
 
@@ -455,8 +537,14 @@ with tab_live:
 
 with tab_scen:
     st.subheader(f"Scenario manager — {_user}")
-    st.caption("Save named design scenarios, compare them side-by-side, and export/import as "
-               "JSON. Saved scenarios live in this browser session — export to keep them.")
+    if _PERSIST:
+        st.caption("Save named design scenarios, compare them side-by-side, and export/import as "
+                   "JSON. Scenarios are **saved durably** (SQLite) per user and persist across "
+                   "sessions and restarts.")
+    else:
+        st.caption("Save named design scenarios, compare them side-by-side, and export/import as "
+                   "JSON. ⚠️ Durable store unavailable — scenarios live in this session only; "
+                   "export to keep them.")
 
     sc1, sc2 = st.columns([2, 1])
     with sc1:
@@ -464,10 +552,11 @@ with tab_scen:
     with sc2:
         st.write("")
         if st.button("💾 Save current design", use_container_width=True, disabled=not new_name):
-            st.session_state[_scen_key][new_name] = design.to_dict()
+            _save_scenario(new_name, design.to_dict())
             st.success(f"Saved '{new_name}'")
+            st.rerun()
 
-    scenarios = st.session_state[_scen_key]
+    scenarios = _load_scenarios()
     if scenarios:
         rows = []
         for name, ddict in scenarios.items():
@@ -485,7 +574,7 @@ with tab_scen:
             st.session_state.design = LZDesign(**scenarios[pick])
             st.rerun()
         if m3.button("🗑️ Delete", use_container_width=True):
-            del scenarios[pick]
+            _delete_scenario(pick)
             st.rerun()
 
         if len(scenarios) >= 2:
@@ -540,8 +629,10 @@ with tab_scen:
                             LZDesign(**v)
                         except TypeError:
                             del valid[k]
-                    scenarios.update(valid)
+                    for k, v in valid.items():
+                        _save_scenario(k, v)
                     st.success(f"Imported {len(valid)} scenario(s).")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Import failed: {e}")
     else:

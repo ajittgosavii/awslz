@@ -11,6 +11,59 @@ from lz_core import LZDesign, estimate_monthly_cost, total_accounts, workload_ac
 
 PASS, WARN, FAIL = "pass", "warn", "fail"
 
+# ---------------------------------------------------------------------------
+# Honest mapping to the official AWS Well-Architected Framework.
+#
+# These checks are landing-zone-focused heuristics. Each one is mapped below to
+# the closest *official* WAF best practice, with a `match` flag:
+#   * "exact"   — the check corresponds directly to that published best practice.
+#   * "adapted" — the check is an LZ-specific interpretation in that practice's
+#                 area; the official best practice is broader or worded
+#                 differently. Do NOT cite an "adapted" result as audit evidence.
+#
+# Always validate findings against the official AWS Well-Architected Tool and the
+# current framework before using them for compliance or audit purposes.
+# ---------------------------------------------------------------------------
+
+WAF_DISCLAIMER = (
+    "Check IDs are indicative and mapped to the closest official AWS Well-Architected "
+    "best practice (see the 'WAF mapping' table). 'Adapted' checks are landing-zone "
+    "interpretations, not 1:1 official practices — use the official Well-Architected "
+    "Tool for audit evidence."
+)
+
+WAF_REFERENCE_URL = "https://docs.aws.amazon.com/wellarchitected/latest/framework/"
+
+# our check_id -> (official best practice it maps to, match flag)
+OFFICIAL_BP = {
+    "SEC01-BP01": ("SEC01-BP01 Separate workloads using accounts", "exact"),
+    "SEC01-BP02": ("SEC01-BP01 Separate workloads using accounts / account governance", "adapted"),
+    "SEC02-BP04": ("SEC02-BP04 Rely on a centralized identity provider", "exact"),
+    "SEC04-BP01": ("SEC04-BP01 Configure service and application logging", "exact"),
+    "SEC04-BP02": ("SEC04-BP02 Capture logs, findings, and metrics in standardized locations", "adapted"),
+    "SEC08-BP01": ("SEC08 Protecting data at rest / data residency controls", "adapted"),
+    "SEC10-BP02": ("SEC10-BP02 Develop incident management plans (containment)", "adapted"),
+    "OPS05-BP01": ("OPS Prepare — implement infrastructure & account automation", "adapted"),
+    "OPS05-BP02": ("OPS Prepare — manage infrastructure as code", "adapted"),
+    "OPS07-BP01": ("OPS Operate — operational readiness & team topology", "adapted"),
+    "OPS08-BP01": ("OPS Operate — standardize operations across the estate", "adapted"),
+    "REL01-BP01": ("REL01 Manage service quotas and constraints / blast radius", "adapted"),
+    "REL02-BP01": ("REL02-BP01 Use highly available network connectivity", "exact"),
+    "REL09-BP01": ("REL09 Back up data (centralized backup & recovery)", "adapted"),
+    "REL10-BP01": ("REL10-BP01 Deploy the workload to multiple locations", "exact"),
+    "REL01-BP03": ("REL01-BP03 Accommodate fixed service quotas through architecture", "adapted"),
+    "PERF04-BP01": ("PERF04 Networking & content delivery — select the right pattern", "adapted"),
+    "PERF04-BP06": ("PERF04 Networking — place resources close to consumers", "adapted"),
+    "PERF02-BP01": ("PERF02 Compute & hardware — consolidate shared services", "adapted"),
+    "COST02-BP01": ("COST03 Monitor usage and cost — cost allocation by account", "adapted"),
+    "COST05-BP01": ("COST05 Plan for data transfer — consolidate egress", "adapted"),
+    "COST01-BP05": ("COST02 Govern usage — proportionate platform overhead", "adapted"),
+    "COST02-BP05": ("COST02-BP05 Implement cost controls (budgets/guardrails)", "adapted"),
+    "SUS01-BP01": ("SUS01 Region selection — choose regions to reduce footprint", "adapted"),
+    "SUS02-BP01": ("SUS02 Alignment to demand — reduce duplicated infrastructure", "adapted"),
+    "SUS05-BP01": ("SUS05 Hardware & services — maximize utilization", "adapted"),
+}
+
 PILLARS = [
     "Operational Excellence",
     "Security",
@@ -319,10 +372,19 @@ _STATUS_POINTS = {PASS: 1.0, WARN: 0.5, FAIL: 0.0}
 
 
 def assess(d: LZDesign) -> dict:
-    """Run all pillar checks. Returns {pillar: {"score": int, "checks": [...]}}."""
+    """Run all pillar checks. Returns {pillar: {"score": int, "checks": [...]}}.
+
+    Each check is enriched with `official` (closest official WAF best practice)
+    and `match` ("exact" | "adapted") so results are never mistaken for a 1:1
+    official assessment.
+    """
     out = {}
     for pillar in PILLARS:
         checks = _PILLAR_FUNCS[pillar](d)
+        for c in checks:
+            official, match = OFFICIAL_BP.get(c["id"], ("(unmapped)", "adapted"))
+            c["official"] = official
+            c["match"] = match
         pts = sum(_STATUS_POINTS[c["status"]] * (2 if c["critical"] else 1) for c in checks)
         weight = sum(2 if c["critical"] else 1 for c in checks)
         out[pillar] = {
@@ -330,6 +392,19 @@ def assess(d: LZDesign) -> dict:
             "checks": checks,
         }
     return out
+
+
+def mapping_table() -> list:
+    """Rows for the WAF-mapping reference table: (our check, official BP, match)."""
+    rows = []
+    for pillar in PILLARS:
+        # build a fresh design-agnostic list just for IDs/titles
+        for c in _PILLAR_FUNCS[pillar](LZDesign()):
+            official, match = OFFICIAL_BP.get(c["id"], ("(unmapped)", "adapted"))
+            rows.append({"Pillar": pillar, "Studio check": f"{c['id']} — {c['title']}",
+                         "Closest official WAF best practice": official,
+                         "Match": "✓ exact" if match == "exact" else "≈ adapted"})
+    return rows
 
 
 def overall_score(assessment: dict) -> int:
@@ -349,12 +424,14 @@ def top_remediations(assessment: dict, limit: int = 8) -> list:
 
 def assessment_markdown(assessment: dict) -> str:
     """Markdown summary of the WAF assessment (for LLM context and reports)."""
-    lines = [f"## Well-Architected Alignment: {overall_score(assessment)}/100\n"]
+    lines = [f"## Well-Architected Alignment: {overall_score(assessment)}/100",
+             f"_{WAF_DISCLAIMER}_\n"]
     for pillar, data in assessment.items():
         lines.append(f"### {pillar} — {data['score']}/100")
         for c in data["checks"]:
             icon = {"pass": "PASS", "warn": "WARN", "fail": "FAIL"}[c["status"]]
-            lines.append(f"- [{icon}] {c['id']} {c['title']}: {c['finding']}")
+            tag = c.get("match", "adapted")
+            lines.append(f"- [{icon}] {c['id']} {c['title']} ({tag} → {c.get('official', '')}): {c['finding']}")
             if c["status"] != "pass":
                 lines.append(f"  - Remediation: {c['remediation']}")
     return "\n".join(lines)
