@@ -24,9 +24,17 @@ RED = "#B0084D"
 
 _MAX_WORKLOAD_NODES = 8
 
-# Light label font so node text is legible on the dark "mission control" canvas
-# (vis.js defaults to a dark label colour, which is invisible on our background).
+# Default light label font (used by the Config fallback).
 _LABEL_FONT = {"color": "#E9EEF7", "size": 15, "face": "Helvetica", "strokeWidth": 0}
+
+
+def _font_for(fill: str) -> dict:
+    """Pick a label colour with strong contrast against the node fill, so the
+    text *inside* each box is always legible (dark on bright, light on dark)."""
+    r, g, b = int(fill[1:3], 16), int(fill[3:5], 16), int(fill[5:7], 16)
+    luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    color = "#0B1220" if luminance > 150 else "#F4F7FB"
+    return {"color": color, "size": 14, "face": "Helvetica", "strokeWidth": 0}
 
 
 def build_org_graph(d: LZDesign):
@@ -39,8 +47,10 @@ def build_org_graph(d: LZDesign):
     details: dict[str, str] = {}
 
     def node(nid, label, color, size=22, shape="dot"):
-        nodes.append(Node(id=nid, label=label, color=color, size=size, shape=shape,
-                          font=_LABEL_FONT))
+        # "box" renders the label INSIDE a rectangle (sized to the text) with a
+        # contrast-aware font, instead of floating it outside the shape.
+        nodes.append(Node(id=nid, label=label, color=color, shape="box",
+                          font=_font_for(color), margin=10, shapeProperties={"borderRadius": 6}))
 
     def edge(a, b):
         edges.append(Edge(source=a, target=b, color="#5A6B86"))
