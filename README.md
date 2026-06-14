@@ -38,10 +38,19 @@ and cost impact. Then get an opinionated review from **Claude** (or OpenAI).
   remediations, cost breakdown, guardrails). Every check is **mapped to the closest
   official WAF best practice** with an honest `exact` / `adapted` flag, plus a
   reference mapping table — so results are never mistaken for an official audit.
-- **🚀 IaC Export** — turn the design into deployable artifacts: Terraform
-  (Organizations, OUs, accounts, real SCP policy documents), an LZA
+- **🚀 IaC — export *and* import** — turn the design into deployable artifacts:
+  Terraform (Organizations, OUs, accounts, real SCP policy documents), an LZA
   `organization/accounts/global` config, or a Control Tower checklist with
-  Account Factory inputs.
+  Account Factory inputs. **Reverse mode:** upload an existing Terraform / LZA /
+  CloudFormation file and the tool infers an approximate design and scores it with
+  the same Well-Architected engine (a local, transparent take on the AWS WA IaC
+  Analyzer), with a confidence-rated signal table — then load it as your design.
+- **📈 Drift & history** — capture point-in-time **target** and **actual** snapshots,
+  chart the Well-Architected trajectory over time, and see the per-pillar
+  target-vs-actual gap. Durable via SQLite.
+- **🔗 Share & collaborate** — generate a shareable link that encodes the whole
+  design in the URL (`?d=<token>`, no server state), and leave **comments** on
+  saved scenarios.
 - **🗺️ Roadmap** — Day 0 / Day 1 / Day 2 implementation timeline (Gantt) derived
   from the design; durations scale with account count, tooling, and network pattern.
 - **📡 Live Estate** — read-only `boto3` scan of a real AWS Organization
@@ -112,6 +121,8 @@ streamlit run app.py
 | `maturity.py` | Maturity levels, next-best-action, and peer benchmark profiles |
 | `interactive_diagrams.py` | Clickable streamlit-agraph org graph with node drill-down |
 | `wizard.py` | Guided 3-step onboarding setup flow |
+| `iac_import.py` | Reverse mode — parse Terraform/LZA/CloudFormation → scored design |
+| `sharing.py` | Encode/decode a design to a URL-safe shareable token |
 | `waf.py` | Well-Architected alignment engine — 25 weighted checks, each mapped to the closest official WAF best practice (`exact`/`adapted`) |
 | `diagrams.py` | Graphviz builders for org structure + network topology |
 | `llm.py` | Provider layer: Claude (Anthropic SDK, streaming) + OpenAI fallback |

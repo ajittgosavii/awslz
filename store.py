@@ -49,11 +49,41 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS snapshots (
+            username    TEXT NOT NULL,
+            ts          TEXT NOT NULL,
+            label       TEXT NOT NULL,
+            kind        TEXT NOT NULL,           -- 'target' | 'actual'
+            waf_overall INTEGER NOT NULL,
+            scores_json TEXT NOT NULL,
+            data_json   TEXT NOT NULL,
+            PRIMARY KEY (username, ts)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS comments (
+            scenario_key TEXT NOT NULL,
+            ts           TEXT NOT NULL,
+            author       TEXT NOT NULL,
+            text         TEXT NOT NULL
+        )
+        """
+    )
     return conn
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _now_precise() -> str:
+    # microsecond precision — used where the timestamp is a primary key, so
+    # rapid successive saves don't collide.
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def available() -> bool:
@@ -121,3 +151,82 @@ def import_many(user: str, scenarios: dict) -> int:
             save_scenario(user, name, ddict)
             count += 1
     return count
+
+
+# ---------------------------------------------------------------------------
+# Snapshots — point-in-time captures for drift / history tracking
+# ---------------------------------------------------------------------------
+
+def save_snapshot(user: str, label: str, kind: str, design_dict: dict,
+                  waf_overall: int, scores: dict) -> None:
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO snapshots "
+                "(username, ts, label, kind, waf_overall, scores_json, data_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user, _now_precise(), label, kind, int(waf_overall),
+                 json.dumps(scores), json.dumps(design_dict)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def load_snapshots(user: str) -> list:
+    """Return [{ts,label,kind,waf_overall,scores,design}] oldest-first."""
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT ts, label, kind, waf_overall, scores_json, data_json "
+                "FROM snapshots WHERE username = ? ORDER BY ts ASC", (user,)).fetchall()
+        finally:
+            conn.close()
+    out = []
+    for ts, label, kind, waf_overall, scores_json, data_json in rows:
+        try:
+            out.append({"ts": ts, "label": label, "kind": kind, "waf_overall": waf_overall,
+                        "scores": json.loads(scores_json), "design": json.loads(data_json)})
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def delete_snapshot(user: str, ts: str) -> None:
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute("DELETE FROM snapshots WHERE username = ? AND ts = ?", (user, ts))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Comments — lightweight collaboration threads keyed by scenario name
+# ---------------------------------------------------------------------------
+
+def add_comment(scenario_key: str, author: str, text: str) -> None:
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                "INSERT INTO comments (scenario_key, ts, author, text) VALUES (?, ?, ?, ?)",
+                (scenario_key, _now(), author, text))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def load_comments(scenario_key: str) -> list:
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT ts, author, text FROM comments WHERE scenario_key = ? ORDER BY ts ASC",
+                (scenario_key,)).fetchall()
+        finally:
+            conn.close()
+    return [{"ts": ts, "author": author, "text": text} for ts, author, text in rows]

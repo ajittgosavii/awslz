@@ -16,6 +16,7 @@ import iac
 import llm
 import maturity
 import roadmap
+import sharing
 import store
 import ui
 import waf
@@ -59,6 +60,16 @@ if "design" not in st.session_state:
     st.session_state.design = LZDesign()
 if "chat" not in st.session_state:
     st.session_state.chat = []  # list of {"role", "content"}
+
+# Load a shared design from a ?d=<token> link, once per session.
+if "shared_loaded" not in st.session_state:
+    _tok = st.query_params.get("d")
+    if _tok:
+        _shared = sharing.decode_design(_tok)
+        if _shared:
+            st.session_state.design = LZDesign(**_shared)
+            st.session_state._flash = "Loaded a shared design from the link."
+    st.session_state.shared_loaded = True
 
 _user = st.session_state.get("lz_user", "operator")
 _scen_key = f"scenarios_{_user}"
@@ -164,10 +175,10 @@ ui.hero(design, n_total, waf_overall, cost["total"])
 if st.session_state.get("_flash"):
     st.toast(st.session_state.pop("_flash"), icon="✅")
 
-(tab_design, tab_sim, tab_waf, tab_iac, tab_road, tab_live,
+(tab_design, tab_sim, tab_waf, tab_iac, tab_road, tab_live, tab_drift,
  tab_scen, tab_advisor, tab_ref) = st.tabs(
-    ["🎨 Design Studio", "🧪 Simulator", "🏛️ Well-Architected", "🚀 IaC Export",
-     "🗺️ Roadmap", "📡 Live Estate", "🗂️ Scenarios", "🤖 AI Advisor", "📚 Reference"])
+    ["🎨 Design Studio", "🧪 Simulator", "🏛️ Well-Architected", "🚀 IaC",
+     "🗺️ Roadmap", "📡 Live Estate", "📈 Drift", "🗂️ Scenarios", "🤖 AI Advisor", "📚 Reference"])
 
 # ============================== DESIGN STUDIO ==============================
 
@@ -322,51 +333,57 @@ with tab_sim:
     st.dataframe(pd.DataFrame(compare_meta), use_container_width=True, hide_index=True)
 
     st.divider()
-    st.subheader("Growth stress-test")
-    st.caption("What happens to your current design as the number of workloads grows?")
-    max_wl = st.slider("Project growth to N workloads", design.num_workloads, 100,
-                       min(60, max(20, design.num_workloads * 3)))
 
-    rows = []
-    for wl in range(1, max_wl + 1, max(1, max_wl // 25)):
-        alt = copy.deepcopy(design)
-        alt.num_workloads = wl
-        s = score_design(alt)
-        rows.append({
-            "Workloads": wl,
-            "Accounts": total_accounts(alt),
-            "Cost / mo": estimate_monthly_cost(alt)["total"],
-            "Scalability": s["Scalability"],
-            "Operational Simplicity": s["Operational Simplicity"],
-        })
-    growth_df = pd.DataFrame(rows)
+    @st.fragment
+    def _growth_stress_test():
+        st.subheader("Growth stress-test")
+        st.caption("What happens to your current design as the number of workloads grows? "
+                   "_(The slider reruns only this panel — instant.)_")
+        max_wl = st.slider("Project growth to N workloads", design.num_workloads, 100,
+                           min(60, max(20, design.num_workloads * 3)))
 
-    g1, g2 = st.columns(2)
-    with g1:
-        fig2 = go.Figure()
-        fig2.add_trace(go.Scatter(x=growth_df["Workloads"], y=growth_df["Accounts"],
-                                  name="Accounts", line=dict(color="#FF9900", width=3)))
-        fig2.add_trace(go.Scatter(x=growth_df["Workloads"], y=growth_df["Cost / mo"],
-                                  name="Cost ($/mo)", yaxis="y2", line=dict(color="#1A476F", width=3)))
-        fig2.update_layout(
-            title="Accounts & platform cost vs. growth",
-            yaxis=dict(title="Accounts"),
-            yaxis2=dict(title="USD / month", overlaying="y", side="right"),
-            height=380, legend=dict(orientation="h", y=-0.2),
-        )
-        st.plotly_chart(fig2, use_container_width=True)
-    with g2:
-        fig3 = go.Figure()
-        fig3.add_trace(go.Scatter(x=growth_df["Workloads"], y=growth_df["Scalability"],
-                                  name="Scalability", line=dict(color="#3F8624", width=3)))
-        fig3.add_trace(go.Scatter(x=growth_df["Workloads"], y=growth_df["Operational Simplicity"],
-                                  name="Operational Simplicity", line=dict(color="#B0084D", width=3)))
-        fig3.update_layout(
-            title="Score trajectory vs. growth",
-            yaxis=dict(range=[0, 100], title="Score"),
-            height=380, legend=dict(orientation="h", y=-0.2),
-        )
-        st.plotly_chart(fig3, use_container_width=True)
+        rows = []
+        for wl in range(1, max_wl + 1, max(1, max_wl // 25)):
+            alt = copy.deepcopy(design)
+            alt.num_workloads = wl
+            s = score_design(alt)
+            rows.append({
+                "Workloads": wl,
+                "Accounts": total_accounts(alt),
+                "Cost / mo": estimate_monthly_cost(alt)["total"],
+                "Scalability": s["Scalability"],
+                "Operational Simplicity": s["Operational Simplicity"],
+            })
+        growth_df = pd.DataFrame(rows)
+
+        g1, g2 = st.columns(2)
+        with g1:
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(x=growth_df["Workloads"], y=growth_df["Accounts"],
+                                      name="Accounts", line=dict(color="#FF9900", width=3)))
+            fig2.add_trace(go.Scatter(x=growth_df["Workloads"], y=growth_df["Cost / mo"],
+                                      name="Cost ($/mo)", yaxis="y2", line=dict(color="#1A476F", width=3)))
+            fig2.update_layout(
+                title="Accounts & platform cost vs. growth",
+                yaxis=dict(title="Accounts"),
+                yaxis2=dict(title="USD / month", overlaying="y", side="right"),
+                height=380, legend=dict(orientation="h", y=-0.2),
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+        with g2:
+            fig3 = go.Figure()
+            fig3.add_trace(go.Scatter(x=growth_df["Workloads"], y=growth_df["Scalability"],
+                                      name="Scalability", line=dict(color="#3F8624", width=3)))
+            fig3.add_trace(go.Scatter(x=growth_df["Workloads"], y=growth_df["Operational Simplicity"],
+                                      name="Operational Simplicity", line=dict(color="#B0084D", width=3)))
+            fig3.update_layout(
+                title="Score trajectory vs. growth",
+                yaxis=dict(range=[0, 100], title="Score"),
+                height=380, legend=dict(orientation="h", y=-0.2),
+            )
+            st.plotly_chart(fig3, use_container_width=True)
+
+    _growth_stress_test()
 
 # ============================ WELL-ARCHITECTED =============================
 
@@ -501,26 +518,83 @@ with tab_waf:
 # ================================ IAC EXPORT ================================
 
 with tab_iac:
-    st.subheader("Infrastructure as Code export")
-    st.caption("Deterministic, reviewable starting points generated from the current design — "
-               "always review and adapt before applying to a real organization.")
+    iac_mode = st.radio("Mode", ["⬇️ Export design → IaC", "📥 Import IaC → assess"],
+                        horizontal=True, label_visibility="collapsed")
 
-    fmt = st.radio("Format", ["Terraform", "Landing Zone Accelerator (LZA)", "Control Tower checklist"],
-                   horizontal=True)
-    if fmt == "Terraform":
-        tf = iac.terraform_export(design)
-        st.download_button("⬇️ Download main.tf", tf, file_name="main.tf", mime="text/plain")
-        st.code(tf, language="hcl")
-    elif fmt == "Landing Zone Accelerator (LZA)":
-        yml = iac.lza_config(design)
-        st.download_button("⬇️ Download lza-config.yaml", yml,
-                           file_name="lza-config.yaml", mime="text/yaml")
-        st.code(yml, language="yaml")
+    if iac_mode.startswith("⬇️"):
+        st.subheader("Infrastructure as Code export")
+        st.caption("Deterministic, reviewable starting points generated from the current design — "
+                   "always review and adapt before applying to a real organization.")
+
+        fmt = st.radio("Format", ["Terraform", "Landing Zone Accelerator (LZA)", "Control Tower checklist"],
+                       horizontal=True)
+        if fmt == "Terraform":
+            tf = iac.terraform_export(design)
+            st.download_button("⬇️ Download main.tf", tf, file_name="main.tf", mime="text/plain")
+            st.code(tf, language="hcl")
+        elif fmt == "Landing Zone Accelerator (LZA)":
+            yml = iac.lza_config(design)
+            st.download_button("⬇️ Download lza-config.yaml", yml,
+                               file_name="lza-config.yaml", mime="text/yaml")
+            st.code(yml, language="yaml")
+        else:
+            md = iac.control_tower_checklist(design)
+            st.download_button("⬇️ Download control-tower-checklist.md", md,
+                               file_name="control-tower-checklist.md", mime="text/markdown")
+            st.markdown(md)
+
     else:
-        md = iac.control_tower_checklist(design)
-        st.download_button("⬇️ Download control-tower-checklist.md", md,
-                           file_name="control-tower-checklist.md", mime="text/markdown")
-        st.markdown(md)
+        import iac_import
+        st.subheader("Assess existing IaC")
+        st.caption("Upload a Terraform (`.tf`), Landing Zone Accelerator config (`.yaml`), or "
+                   "CloudFormation (`.yaml`/`.json`) file. We infer an approximate design from "
+                   "what it declares and score it with the same Well-Architected engine — a local, "
+                   "transparent take on the AWS WA IaC Analyzer.")
+        up = st.file_uploader("IaC file", type=["tf", "yaml", "yml", "json"])
+        pasted = st.text_area("…or paste IaC here", height=140, placeholder="resource \"aws_organizations_organization\" ...")
+        raw, fname = None, "pasted.tf"
+        if up is not None:
+            raw, fname = up.getvalue().decode("utf-8", "replace"), up.name
+        elif pasted.strip():
+            raw = pasted
+
+        if raw:
+            res = iac_import.parse_iac(fname, raw)
+            if not res.get("ok"):
+                st.error(res.get("error", "Parse failed."))
+            else:
+                st.success(f"Parsed as **{res['format'].upper()}**. "
+                           "Detected signals below (with confidence).", icon="✅")
+                imp_design = res["mapped_design"]
+                imp_assess = waf.assess(imp_design)
+                imp_overall = waf.overall_score(imp_assess)
+
+                ic1, ic2 = st.columns([2, 1])
+                with ic1:
+                    st.dataframe(pd.DataFrame(res["signals"]), use_container_width=True, hide_index=True)
+                with ic2:
+                    st.metric("Inferred Well-Architected", f"{imp_overall}/100")
+                    _ilvl = maturity.level_for(imp_overall)
+                    st.metric("Maturity", f"{_ilvl['icon']} {_ilvl['name']}")
+                    if res.get("guardrails"):
+                        st.caption("Guardrails seen: " + ", ".join(res["guardrails"][:6]))
+                if res.get("undetectable"):
+                    st.caption("Not detectable from this file: " + "; ".join(res["undetectable"]) + ".")
+
+                fig_imp = go.Figure(go.Bar(
+                    x=[p["score"] for p in imp_assess.values()],
+                    y=list(imp_assess.keys()), orientation="h",
+                    marker_color=["#3F8624" if p["score"] >= 80 else "#FF9900" if p["score"] >= 55
+                                  else "#B0084D" for p in imp_assess.values()],
+                    text=[f"{p['score']}" for p in imp_assess.values()], textposition="outside"))
+                fig_imp.update_layout(xaxis=dict(range=[0, 110]), yaxis=dict(autorange="reversed"),
+                                      height=300, margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig_imp, use_container_width=True)
+
+                if st.button("⬅️ Load parsed IaC as my working design", use_container_width=True):
+                    st.session_state.design = imp_design
+                    st.session_state._flash = f"Loaded design from {res['format'].upper()} (WAF {imp_overall})"
+                    st.rerun()
 
 # ================================= ROADMAP ==================================
 
@@ -630,10 +704,92 @@ with tab_live:
                 st.session_state.design = mapped
                 st.rerun()
 
+# ================================== DRIFT ===================================
+
+with tab_drift:
+    st.subheader("Drift & history")
+    st.caption("Capture point-in-time snapshots of your design (**target**) and your real "
+               "estate (**actual** — load a scan from Live Estate first), then track the "
+               "Well-Architected trajectory and the target-vs-actual gap over time.")
+    if not _PERSIST:
+        st.info("Durable store unavailable — snapshots require SQLite persistence "
+                "(set LZ_DB_PATH to a writable path).", icon="ℹ️")
+    else:
+        dc1, dc2, dc3 = st.columns([2, 1, 1])
+        snap_label = dc1.text_input("Snapshot label", placeholder="e.g. Q3 baseline",
+                                    key="snap_label")
+        if dc2.button("📌 Save as TARGET", use_container_width=True, disabled=not snap_label):
+            store.save_snapshot(_user, snap_label, "target", design.to_dict(), waf_overall, scores)
+            st.session_state._flash = f"Saved target snapshot '{snap_label}'"
+            st.rerun()
+        if dc3.button("📡 Save as ACTUAL", use_container_width=True, disabled=not snap_label):
+            store.save_snapshot(_user, snap_label, "actual", design.to_dict(), waf_overall, scores)
+            st.session_state._flash = f"Saved actual snapshot '{snap_label}'"
+            st.rerun()
+
+        snaps = store.load_snapshots(_user)
+        if not snaps:
+            st.info("No snapshots yet. Save the current design as a **target**, then evolve it "
+                    "(or load a live scan as your working design) and save **actuals** to see drift.")
+        else:
+            hist_df = pd.DataFrame([{
+                "When": s["ts"][:16].replace("T", " "), "Label": s["label"],
+                "Kind": s["kind"], "WAF": s["waf_overall"]} for s in snaps])
+            st.dataframe(hist_df, use_container_width=True, hide_index=True)
+
+            fig_traj = go.Figure()
+            for kind, color in (("target", "#FF9900"), ("actual", "#2DD4BF")):
+                pts = [s for s in snaps if s["kind"] == kind]
+                if pts:
+                    fig_traj.add_trace(go.Scatter(
+                        x=[p["ts"][:16].replace("T", " ") for p in pts],
+                        y=[p["waf_overall"] for p in pts], mode="lines+markers",
+                        name=kind, line=dict(color=color, width=3)))
+            fig_traj.update_layout(title="Well-Architected trajectory",
+                                   yaxis=dict(range=[0, 100], title="WAF /100"),
+                                   height=340, legend=dict(orientation="h", y=-0.2))
+            st.plotly_chart(fig_traj, use_container_width=True)
+
+            targets = [s for s in snaps if s["kind"] == "target"]
+            actuals = [s for s in snaps if s["kind"] == "actual"]
+            if targets and actuals:
+                t, a = targets[-1], actuals[-1]
+                st.subheader(f"Target vs actual — '{t['label']}' vs '{a['label']}'")
+                dims_d = list(t["scores"].keys())
+                gap_df = pd.DataFrame(
+                    [{"Dimension": k, "Target": t["scores"][k], "Actual": a["scores"][k],
+                      "Gap (A−T)": a["scores"][k] - t["scores"][k]} for k in dims_d]
+                    + [{"Dimension": "WAF overall", "Target": t["waf_overall"],
+                        "Actual": a["waf_overall"], "Gap (A−T)": a["waf_overall"] - t["waf_overall"]}])
+                st.dataframe(gap_df, use_container_width=True, hide_index=True)
+                worst = min(dims_d, key=lambda k: a["scores"][k] - t["scores"][k])
+                if a["scores"][worst] - t["scores"][worst] < 0:
+                    st.warning(f"Largest gap: **{worst}** is {t['scores'][worst] - a['scores'][worst]} "
+                               "points below target.", icon="⚠️")
+                else:
+                    st.success("Actual meets or exceeds target on every dimension. 🎉")
+
+            with st.expander("Manage snapshots"):
+                pick = st.selectbox("Snapshot",
+                                    [f"{s['ts']} · {s['label']} ({s['kind']})" for s in snaps])
+                if st.button("🗑️ Delete selected snapshot"):
+                    store.delete_snapshot(_user, pick.split(" · ")[0])
+                    st.rerun()
+
 # ================================= SCENARIOS ================================
 
 with tab_scen:
     st.subheader(f"Scenario manager — {_user}")
+
+    # --- Share & collaborate ---
+    with st.expander("🔗 Share this design (link) & comments"):
+        token = sharing.encode_design(design.to_dict())
+        if st.button("Generate shareable link"):
+            st.query_params["d"] = token
+            st.toast("Share link set in the address bar — copy the URL.", icon="🔗")
+        st.caption("Copy the browser URL after clicking, or share the token below "
+                   "(paste it into another session's URL as `?d=<token>`).")
+        st.code(token, language="text")
     if _PERSIST:
         st.caption("Save named design scenarios, compare them side-by-side, and export/import as "
                    "JSON. Scenarios are **saved durably** (SQLite) per user and persist across "
@@ -673,6 +829,23 @@ with tab_scen:
         if m3.button("🗑️ Delete", use_container_width=True):
             _delete_scenario(pick)
             st.rerun()
+
+        if _PERSIST and pick:
+            st.markdown(f"**💬 Comments on '{pick}'**")
+            _comments = store.load_comments(pick)
+            for cm in _comments:
+                st.markdown(
+                    f"<span style='color:#8C9CB8;font-size:.72rem'>"
+                    f"{cm['ts'][:16].replace('T', ' ')} · {cm['author']}</span>  \n{cm['text']}",
+                    unsafe_allow_html=True)
+            if not _comments:
+                st.caption("No comments yet — start the thread.")
+            nc1, nc2 = st.columns([3, 1])
+            new_comment = nc1.text_input("Add a comment", key=f"cmt_{pick}",
+                                         label_visibility="collapsed", placeholder="Add a comment…")
+            if nc2.button("Post", use_container_width=True, disabled=not new_comment):
+                store.add_comment(pick, _user, new_comment)
+                st.rerun()
 
         if len(scenarios) >= 2:
             st.divider()
