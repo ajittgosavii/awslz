@@ -376,9 +376,12 @@ def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdw
     s.append(_text(345, 300, "DX primary ⇄ VPN auto-failover", AMBER, 9.5, "600", "middle"))
     # Site-to-Site VPN also lands on the AWS-side SD-WAN (HA) appliance as the
     # backup SD-WAN underlay (DX is the primary underlay) — distinct violet path.
+    # Drawn to BOTH regions' SD-WAN (HA) appliances.
     sg, _ = _flow(420, 512, r1sd[0], r1sd[1], "flow-vpnsd", mid=(500, 560, 600, r1sd[1] + 30))
     s.append(sg)
-    s.append(_text(430, 560, "VPN → SD-WAN (HA) backup underlay", "#9B6DFF", 8.5, "600"))
+    sg, _ = _flow(420, 520, r2sd[0], r2sd[1], "flow-vpnsd", mid=(620, 620, r2sd[0] - 120, r2sd[1] + 40))
+    s.append(sg)
+    s.append(_text(430, 560, "VPN → SD-WAN (HA) backup underlay (both regions)", "#9B6DFF", 8.5, "600"))
     # inter-region TGW peering (carries traffic to region 2)
     sg, dp = _flow(r1tx1, r1cy, r2tx0, r2cy, "flow-peer", mid=(r1tx1 + 70, r1cy - 60, r2tx0 - 70, r2cy - 60))
     s.append(sg); flows.append((dp, TEAL, "2.8s"))
