@@ -30,6 +30,20 @@ INKT = "#0B1220"
 
 _ENVS = [("Production", RED), ("Stage", AMBER), ("Dev", BLUE)]
 
+_STYLE = """
+<style>
+  .flow { stroke-width: 2; stroke-dasharray: 9 7; animation: dash 1s linear infinite; }
+  @keyframes dash { to { stroke-dashoffset: -32; } }
+  .flow-dx { stroke:#FF9900; }
+  .flow-peer { stroke:#2DD4BF; animation-duration:1.6s; stroke-width:2.4; }
+  .flow-inspect { stroke:#3F8624; animation-duration:1.4s; }
+  .flow-egress { stroke:#5B8DEF; animation-duration:1.5s; }
+  .flow-sdwan { stroke:#2DD4BF; opacity:.8; animation-duration:1.8s; }
+  .flow-vpn { stroke:#B0084D; stroke-dasharray:4 9; animation-duration:2.6s; opacity:.85; }
+  text { paint-order: stroke; }
+</style>
+"""
+
 
 def _env_cidrs(supernet):
     rows, _ = cidr.allocate_plan(supernet, 18, 3, 22, 1, ["public", "app", "db"],
@@ -95,7 +109,11 @@ def _region(x0, w, name, supernet, sdwan=True):
     if sdwan:
         g.append(_node(nx + 160, ny + 100, 150, 46, "SD-WAN (HA)", TEAL, INKT, "TGW Connect / GRE"))
     g.append(_node(nx + 322, ny + 34, nw - 336, 52, "Security acct", NAVY, "#E9EEF7", "LogArchive·Audit"))
-    g.append(_node(nx + 322, ny + 100, nw - 336, 46, "Shared Svcs", NAVY, "#E9EEF7", "CI/CD·AMIs"))
+    g.append(_node(nx + 322, ny + 100, nw - 336, 46, "Shared Services", NAVY, "#E9EEF7",
+                   "AD · ITSM · AWS SSO"))
+    g.append(_text(nx + 12, ny + 188, "+ Route 53 Resolver · VPC interface endpoints (PrivateLink) · "
+                   "all VPC↔VPC and on-prem traffic inspected by AWS Network Firewall",
+                   MUT, 8.5, "500"))
 
     tgw_cx = tgw_x + tgw_w / 2
     tgw_cy = tgw_y + tgw_h / 2
@@ -130,6 +148,116 @@ def _region(x0, w, name, supernet, sdwan=True):
     svg = "".join(g) + "".join(f for f, *_ in flows)
     packets = "".join(_packet(d, c, dur) for _, d, c, dur in flows[:2])
     return svg + packets, tgw_x, tgw_x + tgw_w, tgw_cx, tgw_cy
+
+
+def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 Gbps"):
+    """Deep-dive of ONE region fully expanded: 2 AZs, every subnet (public/app/db),
+    route tables, firewall endpoints per AZ, NAT per AZ, IGW, TGW attachments, and
+    Shared Services (AD/ITSM/SSO). Animated ingress / egress / east-west flows, all
+    routed through the AWS Network Firewall (appliance-mode inspection)."""
+    W, H = 1500, 1060
+    ec = _env_cidrs(supernet)
+    prod = ec.get("Production", {"vpc": supernet, "subnets": {}})
+    s = [f'<rect width="{W}" height="{H}" fill="#080D17"/>']
+    flows = []
+
+    # --- top band: on-prem, DX/VPN, TGW, Internet ---
+    s.append(_rect(20, 40, 220, 150, PANEL, stroke=GREY, rx=12, dash="5 5"))
+    s.append(_text(32, 60, "On-premises", MUT, 11, "700"))
+    s.append(_node(30, 70, 200, 40, "Datacenter", GREY, "#E9EEF7", "10.100.0.0/16"))
+    s.append(_node(30, 116, 200, 30, "SD-WAN edge", TEAL, INKT))
+    s.append(_node(30, 150, 200, 30, "Branches ×3", "#3A4555", "#E9EEF7"))
+    s.append(_node(270, 56, 150, 48, "Direct Connect", NAVY, "#E9EEF7", f"DX GW · {dx_speed}"))
+    s.append(_node(270, 120, 150, 48, "Site-to-Site VPN", "#3A2530", "#E9EEF7", "backup"))
+    s.append(_node(660, 60, 180, 50, "Transit Gateway", INK, "#E9EEF7", "appliance-mode"))
+    s.append(_rect(660, 60, 180, 50, "none", stroke=AMBER, sw=2, rx=10))
+    s.append(_node(660, 118, 180, 26, "TGW route table → inspection", NAVY, "#E9EEF7", rx=6))
+    s.append(_node(1300, 50, 170, 50, "🌐 Internet", "#22303f", "#E9EEF7", "egress"))
+    tgw_cx, tgw_bottom = 750, 144
+
+    # --- Inspection / Network VPC ---
+    iy = 210
+    s.append(_rect(300, iy, 1170, 196, "#0C1422", stroke=GREEN, sw=1.6, rx=12))
+    s.append(_text(312, iy + 20, "Inspection VPC · Network account  (AWS Network Firewall — stateful)",
+                   GREEN, 11.5, "700"))
+    s.append(_node(1230, iy + 12, 160, 34, "Internet Gateway", BLUE, "#E9EEF7", rx=8))
+    fw_anchor, nat_anchor = {}, {}
+    for i, suffix in enumerate("ab"):
+        ax = 330 + i * 460
+        s.append(_rect(ax, iy + 40, 430, 140, "#0a1019", stroke=LINE, rx=10, dash="3 4"))
+        s.append(_text(ax + 12, iy + 58, f"AZ {region}{suffix}", MUT, 10, "600"))
+        s.append(_node(ax + 14, iy + 66, 200, 44, "Firewall endpoint", GREEN, INKT, "inspection"))
+        s.append(_node(ax + 14, iy + 116, 200, 40, "NAT gateway", BLUE, "#E9EEF7", "egress"))
+        s.append(_node(ax + 226, iy + 66, 190, 44, "TGW attach subnet", NAVY, "#E9EEF7", "ENI"))
+        s.append(_node(ax + 226, iy + 116, 190, 40, "Firewall subnet", "#1d3b24", "#E9EEF7", rx=8))
+        fw_anchor[suffix] = (ax + 114, iy + 88)
+        nat_anchor[suffix] = (ax + 114, iy + 136)
+
+    # --- Production VPC fully expanded ---
+    py = 430
+    s.append(_rect(300, py, 1170, 340, "#0C1422", stroke=RED, sw=1.6, rx=12))
+    s.append(_text(312, py + 20, f"Production VPC · {prod['vpc']} · multi-AZ", RED, 11.5, "700"))
+    tiers = [("public", GREEN, "RT: 0.0.0.0/0 → IGW"),
+             ("app", NAVY, "RT: 0.0.0.0/0 → TGW (→ firewall)"),
+             ("db", GREY, "RT: local only")]
+    app_anchor = {}
+    for i, suffix in enumerate("ab"):
+        ax = 330 + i * 460
+        s.append(_rect(ax, py + 40, 430, 286, "#0a1019", stroke=LINE, rx=10, dash="3 4"))
+        s.append(_text(ax + 12, py + 58, f"AZ {region}{suffix}", MUT, 10, "600"))
+        subs = prod.get("subnets", {})
+        for j, (tier, col, rt) in enumerate(tiers):
+            sy = py + 66 + j * 58
+            s.append(_node(ax + 14, sy, 190, 48, f"{tier} subnet", col, "#E9EEF7" if tier != "db" else "#E9EEF7",
+                           subs.get(tier, "")))
+            s.append(_node(ax + 214, sy + 4, 200, 40, rt, "#16202e", MUT, rx=7))
+            if tier == "app":
+                app_anchor[suffix] = (ax + 109, sy + 24)
+        s.append(_node(ax + 14, py + 240, 400, 34, "TGW attach subnet (×AZ)", NAVY, "#E9EEF7", rx=8))
+
+    # --- Shared Services VPC ---
+    sy = 794
+    s.append(_rect(300, sy, 1170, 120, "#0C1422", stroke=TEAL, sw=1.4, rx=12))
+    s.append(_text(312, sy + 20, "Shared Services VPC", TEAL, 11.5, "700"))
+    for i, (lab, sub) in enumerate([
+            ("Active Directory", "AWS Managed AD"), ("ITSM", "ServiceNow connector"),
+            ("AWS SSO", "IAM Identity Center"), ("Route 53 Resolver", "hybrid DNS"),
+            ("VPC Endpoints", "PrivateLink"), ("CI/CD · AMIs", "golden images")]):
+        x = 318 + i * 192
+        s.append(_node(x, sy + 32, 180, 56, lab, NAVY, "#E9EEF7", sub))
+
+    # --- animated traffic flows (all via the firewall) ---
+    # 1) ingress: DX -> TGW -> firewall endpoint (AZ-a) -> app subnet (AZ-a)
+    sg, d = _flow(420, 80, 660, 85, "flow-dx"); s.append(sg); flows.append((d, AMBER, "2.2s"))
+    sg, d = _flow(tgw_cx, tgw_bottom, *fw_anchor["a"], "flow-inspect", mid=(tgw_cx, 200, fw_anchor["a"][0], 230)); s.append(sg); flows.append((d, GREEN, "2.0s"))
+    sg, d = _flow(*fw_anchor["a"], *app_anchor["a"], "flow-inspect", mid=(fw_anchor["a"][0], 420, app_anchor["a"][0], 470)); s.append(sg); flows.append((d, GREEN, "2.2s"))
+    # 2) egress: app (AZ-b) -> TGW -> firewall (AZ-b) -> NAT (AZ-b) -> IGW -> Internet
+    sg, d = _flow(*app_anchor["b"], tgw_cx + 20, tgw_bottom, "flow-egress", mid=(app_anchor["b"][0], 430, tgw_cx + 20, 220)); s.append(sg); flows.append((d, BLUE, "2.8s"))
+    sg, d = _flow(tgw_cx + 20, tgw_bottom, *fw_anchor["b"], "flow-inspect", mid=(tgw_cx + 20, 200, fw_anchor["b"][0], 230)); s.append(sg)
+    sg, d = _flow(*fw_anchor["b"], *nat_anchor["b"], "flow-egress"); s.append(sg)
+    sg, d = _flow(*nat_anchor["b"], 1310, iy + 29, "flow-egress", mid=(1250, iy + 136, 1310, iy + 60)); s.append(sg)
+    sg, d = _flow(1390, iy + 29, 1385, 100, "flow-egress"); s.append(sg); flows.append((d, BLUE, "2.6s"))
+    # 3) east-west AZ-a app <-> AZ-b app, inspected at TGW/firewall
+    sg, d = _flow(*app_anchor["a"], *app_anchor["b"], "flow-peer", mid=(app_anchor["a"][0], py + 300, app_anchor["b"][0], py + 300)); s.append(sg); flows.append((d, TEAL, "3.0s"))
+
+    # step labels
+    s.append(_text(470, 200, "① ingress (DC → TGW → firewall → app)", GREEN, 9.5, "600"))
+    s.append(_text(980, 200, "② egress (app → TGW → firewall → NAT → IGW)", BLUE, 9.5, "600"))
+    s.append(_text(560, py + 296, "③ east-west VPC↔VPC inspected via TGW + firewall", TEAL, 9.5, "600"))
+
+    # legend
+    legend = []
+    for i, (lab, col, cls) in enumerate([
+            ("DX (primary)", AMBER, "flow-dx"), ("Inspection (firewall)", GREEN, "flow-inspect"),
+            ("Egress → NAT → IGW", BLUE, "flow-egress"), ("East-west (inspected)", TEAL, "flow-peer")]):
+        x = 320 + i * 270
+        legend.append(f'<line x1="{x}" y1="{H-20}" x2="{x+24}" y2="{H-20}" class="flow {cls}"/>')
+        legend.append(_text(x + 30, H - 16, lab, MUT, 10, "500"))
+
+    packets = "".join(_packet(d, c, dur) for d, c, dur in flows)
+    svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" preserveAspectRatio="xMidYMid meet" '
+           f'xmlns="http://www.w3.org/2000/svg">' + "".join(s) + "".join(legend) + packets + '</svg>')
+    return f'<div style="background:#080D17;border-radius:14px;overflow:auto">{_STYLE}{svg}</div>'
 
 
 def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdwan=True):
@@ -187,21 +315,8 @@ def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdw
         legend.append(f'<line x1="{x}" y1="{ly}" x2="{x+24}" y2="{ly}" class="flow {cls}"/>')
         legend.append(_text(x + 30, ly + 4, lab, MUT, 10, "500"))
 
-    style = """
-    <style>
-      .flow { stroke-width: 2; stroke-dasharray: 9 7; animation: dash 1s linear infinite; }
-      @keyframes dash { to { stroke-dashoffset: -32; } }
-      .flow-dx { stroke:#FF9900; }
-      .flow-peer { stroke:#2DD4BF; animation-duration:1.6s; stroke-width:2.4; }
-      .flow-inspect { stroke:#3F8624; animation-duration:1.4s; }
-      .flow-egress { stroke:#5B8DEF; }
-      .flow-sdwan { stroke:#2DD4BF; opacity:.8; animation-duration:1.8s; }
-      .flow-vpn { stroke:#B0084D; stroke-dasharray:4 9; animation-duration:2.6s; opacity:.85; }
-      text { paint-order: stroke; }
-    </style>
-    """
     svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" preserveAspectRatio="xMidYMid meet" '
            f'xmlns="http://www.w3.org/2000/svg">'
            f'<rect width="{W}" height="{H}" fill="#080D17"/>'
            + "".join(s) + "".join(legend) + packets + '</svg>')
-    return (f'<div style="background:#080D17;border-radius:14px;overflow:auto">{style}{svg}</div>')
+    return (f'<div style="background:#080D17;border-radius:14px;overflow:auto">{_STYLE}{svg}</div>')

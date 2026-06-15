@@ -1349,19 +1349,30 @@ def _ma_integration(design, derived):
     st.caption("Company B's accounts land in the **Acquired / Quarantine OU** (permissive SCP), are "
                "baselined, then graduate into the Prod / Stage / Dev OUs.")
 
-    st.markdown("###### 🎞️ End-state architecture — two regions (animated)")
-    st.caption("Detailed end state across **us-east-1 + us-west-2** with every component — datacenter "
-               "+ branches, **Direct Connect** + **Site-to-Site VPN** backup, per-region **Transit "
-               "Gateway** with **inter-region peering**, **AWS Network Firewall** (inspection), "
-               "**NAT/egress**, **SD-WAN**, the **Security / Shared-Services** accounts, and the "
-               "**Prod/Stage/Dev VPCs with public/app/db subnets**. The dashes/packets animate the "
-               "**traffic flow** (see the legend at the bottom).")
-    _end_html = arch_diagram.animated_endstate(regions=("us-east-1", "us-west-2"),
-                                               dx_speed=dx_speed, sdwan=True)
-    st.components.v1.html(_end_html, height=700, scrolling=True)
-    st.download_button("⬇️ End-state diagram (HTML, animated)", _end_html,
-                       file_name="end-state-architecture.html", mime="text/html",
-                       use_container_width=True, key="endstate_dl")
+    st.markdown("###### 🎞️ End-state architecture (animated)")
+    end_view = st.radio(
+        "View", ["Two-region overview (us-east-1 + us-west-2)", "Single-region deep-dive (us-east-1)"],
+        horizontal=True, key="endstate_view", label_visibility="collapsed")
+    if end_view.startswith("Single"):
+        st.caption("**Deep-dive** of one region fully expanded — **two AZs**, every **subnet** "
+                   "(public/app/db), **route tables**, **AWS Network Firewall endpoints per AZ**, "
+                   "**NAT per AZ**, **IGW**, **TGW attachments**, and **Shared Services** "
+                   "(Active Directory · ITSM · AWS SSO · Route 53 Resolver · endpoints). Flows show "
+                   "**① ingress, ② egress, ③ east-west — all inspected by the firewall**.")
+        _end_html = arch_diagram.single_region_zoom("us-east-1", "10.20.0.0/16", dx_speed)
+        _h, _fn = 780, "end-state-single-region.html"
+    else:
+        st.caption("Detailed end state across **us-east-1 + us-west-2** — datacenter + branches, "
+                   "**Direct Connect** + **VPN backup**, per-region **Transit Gateway** with "
+                   "**inter-region peering**, **AWS Network Firewall** (inspection), **NAT/egress**, "
+                   "**SD-WAN**, the **Security** account, **Shared Services (AD · ITSM · AWS SSO)**, "
+                   "and the **Prod/Stage/Dev VPCs with public/app/db subnets**. Dashes/packets animate "
+                   "the **traffic flow** (legend at the bottom).")
+        _end_html = arch_diagram.animated_endstate(("us-east-1", "us-west-2"), dx_speed, True)
+        _h, _fn = 700, "end-state-two-region.html"
+    st.components.v1.html(_end_html, height=_h, scrolling=True)
+    st.download_button("⬇️ This diagram (animated HTML)", _end_html, file_name=_fn,
+                       mime="text/html", use_container_width=True, key="endstate_dl")
 
     _runbook([
         ("Phase 0 — Connect the new account to the datacenter (DX over SD-WAN)", [
