@@ -246,7 +246,7 @@ table(["Module", "Purpose"], [
     ["store.py", "Pluggable persistence (PostgreSQL/SQLite): scenarios, snapshots, comments"],
     ["live_aws.py", "Read-only AWS Organizations scanner + Control Tower confirmation + estate→design mapping"],
     ["drift_collector.py", "Headless CLI — scheduled read-only scan → 'actual' drift snapshot"],
-    ["iac.py", "IaC exporters: Terraform / LZA config / Control Tower checklist"],
+    ["iac.py", "IaC exporters: Terraform / LZA / Control Tower; multi-org replication bundle (.zip); hybrid connectivity scaffold (DX + SD-WAN + TGW/Cloud WAN)"],
     ["iac_import.py", "Reverse mode — parse Terraform (python-hcl2 + regex fallback) / LZA / CloudFormation → scored design"],
     ["sharing.py", "Encode/decode a design to a URL-safe shareable token"],
     ["wizard.py", "Guided 3-step onboarding setup flow"],

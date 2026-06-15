@@ -723,6 +723,16 @@ def _hybrid_network(design, derived):
     ])
     _refs(["dx", "cloudwan", "ma_network"])
 
+    st.divider()
+    st.markdown("#### Generate the connectivity IaC")
+    st.caption("Terraform scaffold for this topology: DX Gateway + transit VIF(s), the "
+               f"{hub} hub, a Site-to-Site VPN backup path"
+               + (", and SD-WAN appliances via Transit Gateway Connect (GRE/BGP)." if sdwan else "."))
+    tf = iac.connectivity_terraform(hub, dx_speed, dx_redundancy.startswith("Redundant"), sdwan, vpcs)
+    st.download_button("⬇️ Download connectivity.tf (Terraform)", tf,
+                       file_name="connectivity.tf", mime="text/plain",
+                       use_container_width=True, key="conn_tf_net")
+
 
 def _render_network_graph(vpcs, dcs, hub, dx_speed, sdwan, branches):
     INK, AMBER, TEAL, NAVY, GREY = "#232F3E", "#FF9900", "#2DD4BF", "#1A476F", "#6E7A8C"
@@ -976,10 +986,15 @@ def _ma_integration(design, derived):
     st.markdown("#### Plug-and-play: generate the integration IaC")
     st.caption("Emits the Terraform scaffold to vend the new integration account and replicate Company "
                "A's blueprint — a reusable starting point for repeating this pattern across acquisitions.")
+    ic1, ic2 = st.columns(2)
     bundle = iac.replication_bundle(design, ["company-a-integration"])
-    st.download_button("⬇️ Download integration IaC (Terraform + AFT, .zip)", bundle,
-                       file_name="ma-integration-iac.zip", mime="application/zip",
-                       use_container_width=True)
+    ic1.download_button("⬇️ Integration account IaC (Terraform + AFT, .zip)", bundle,
+                        file_name="ma-integration-iac.zip", mime="application/zip",
+                        use_container_width=True)
+    conn_tf = iac.connectivity_terraform(hub, dx_speed, dx_redundant, True, 5)
+    ic2.download_button("⬇️ Phase-0 connectivity.tf (DX + SD-WAN + hub)", conn_tf,
+                        file_name="connectivity.tf", mime="text/plain",
+                        use_container_width=True, key="conn_tf_integration")
 
     st.divider()
     st.markdown("#### Plug-and-play: per-wave MGN cutover runbook for Company B's VMs")
