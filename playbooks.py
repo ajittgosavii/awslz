@@ -22,6 +22,7 @@ import math
 import plotly.graph_objects as go
 import streamlit as st
 
+import arch_diagram
 import cidr
 import iac
 import pricing
@@ -1347,6 +1348,20 @@ def _ma_integration(design, derived):
     st.graphviz_chart(_ou_structure_dot(design, include_quarantine=True), use_container_width=True)
     st.caption("Company B's accounts land in the **Acquired / Quarantine OU** (permissive SCP), are "
                "baselined, then graduate into the Prod / Stage / Dev OUs.")
+
+    st.markdown("###### 🎞️ End-state architecture — two regions (animated)")
+    st.caption("Detailed end state across **us-east-1 + us-west-2** with every component — datacenter "
+               "+ branches, **Direct Connect** + **Site-to-Site VPN** backup, per-region **Transit "
+               "Gateway** with **inter-region peering**, **AWS Network Firewall** (inspection), "
+               "**NAT/egress**, **SD-WAN**, the **Security / Shared-Services** accounts, and the "
+               "**Prod/Stage/Dev VPCs with public/app/db subnets**. The dashes/packets animate the "
+               "**traffic flow** (see the legend at the bottom).")
+    _end_html = arch_diagram.animated_endstate(regions=("us-east-1", "us-west-2"),
+                                               dx_speed=dx_speed, sdwan=True)
+    st.components.v1.html(_end_html, height=700, scrolling=True)
+    st.download_button("⬇️ End-state diagram (HTML, animated)", _end_html,
+                       file_name="end-state-architecture.html", mime="text/html",
+                       use_container_width=True, key="endstate_dl")
 
     _runbook([
         ("Phase 0 — Connect the new account to the datacenter (DX over SD-WAN)", [

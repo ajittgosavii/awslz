@@ -251,6 +251,8 @@ table(["Module", "Purpose"], [
     ["iac.py", "IaC exporters: Terraform / LZA / Control Tower; multi-org replication bundle (.zip); hybrid connectivity scaffold (DX + SD-WAN + TGW/Cloud WAN)"],
     ["iac_import.py", "Reverse mode — parse Terraform (python-hcl2 + regex fallback) / LZA / CloudFormation → scored design"],
     ["sharing.py", "Encode/decode a design to a URL-safe shareable token"],
+    ["arch_diagram.py", "Animated two-region end-state architecture (hand-laid SVG with flowing-traffic animation)"],
+    ["checklists.py", "Trackable project-plan checklists + critical-path timelines + master plan export"],
     ["wizard.py", "Guided 3-step onboarding setup flow"],
     ["interactive_diagrams.py", "Clickable streamlit-agraph org graph with node drill-down"],
     ["gv_diagrams.py", "Graphviz builders for org structure + network topology (renamed to free the 'diagrams' name for the icon library)"],
