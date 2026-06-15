@@ -18,6 +18,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import iac
+
 # AWS reserves 5 IPs in every subnet (network, VPC router, DNS, future, broadcast).
 AWS_RESERVED = 5
 
@@ -95,6 +97,7 @@ def allocate_plan(supernet: str, vpc_prefix: int, n_vpcs: int, subnet_prefix: in
                     rows.append({
                         "VPC": name, "VPC CIDR": str(vb),
                         "Subnet": f"{tier}-az{az + 1}", "Subnet CIDR": str(s),
+                        "Tier": tier, "AZ": az + 1,
                         "Addresses": s.num_addresses,
                         "Usable (AWS)": max(0, s.num_addresses - AWS_RESERVED),
                     })
@@ -195,6 +198,10 @@ def _render_allocate(design):
     n_azs = c5.slider("Availability Zones", 1, 4, 3)
     tiers_str = c6.text_input("Subnet tiers", value="public, app, db")
     tiers = [t.strip() for t in tiers_str.split(",") if t.strip()] or ["public", "private"]
+    default_region = "us-east-1"
+    if design is not None and getattr(design, "regions", None):
+        default_region = design.regions[0]
+    region = st.text_input("Region (for subnet Availability Zones)", value=default_region)
 
     try:
         rows, s = allocate_plan(supernet, vpc_prefix, n_vpcs, subnet_prefix, n_azs, tiers)
@@ -225,8 +232,18 @@ def _render_allocate(design):
 
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
-    st.download_button("⬇️ Download IP plan (CSV)", df.to_csv(index=False),
-                       file_name="landing-zone-ip-plan.csv", mime="text/csv")
+
+    d1, d2 = st.columns(2)
+    d1.download_button("⬇️ IP plan (CSV)", df.to_csv(index=False),
+                       file_name="landing-zone-ip-plan.csv", mime="text/csv",
+                       use_container_width=True)
+    d2.download_button("⬇️ VPC/subnet Terraform (wired to the connectivity hub)",
+                       iac.vpc_network_bundle(rows, region),
+                       file_name="vpc-network.zip", mime="application/zip",
+                       use_container_width=True)
+    st.caption("The Terraform `.zip` creates these exact VPCs/subnets and a "
+               "`locals.spoke_vpc_attachments` map that feeds the Playbooks **connectivity.tf** "
+               "`var.spoke_vpc_attachments` — so the IP plan and the hub stay consistent.")
 
 
 def _render_inspect():
