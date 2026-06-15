@@ -39,6 +39,8 @@ _STYLE = """
   .flow-inspect { stroke:#3F8624; animation-duration:1.4s; }
   .flow-egress { stroke:#5B8DEF; animation-duration:1.5s; }
   .flow-sdwan { stroke:#2DD4BF; opacity:.8; animation-duration:1.8s; }
+  .flow-attach { stroke:#FF9900; opacity:.5; animation-duration:2.4s; }
+  .flow-log { stroke:#8C9CB8; stroke-dasharray:2 7; animation-duration:3.4s; opacity:.6; }
   .flow-vpn { stroke:#B0084D; stroke-dasharray:4 9; animation-duration:2.6s; opacity:.85; }
   /* DX <-> VPN auto-failover: DX active, then drops while VPN takes over */
   .fail-dx { stroke:#FF9900; stroke-width:2.6; stroke-dasharray:9 7;
@@ -149,9 +151,25 @@ def _region(x0, w, name, supernet, sdwan=True):
         flows.append((s1, d1, GREEN, "3.4s"))
         ey += 196
 
-    # TGW -> Firewall (inspection), TGW -> SD-WAN
+    # TGW -> Firewall (inspection)
     s, d = _flow(tgw_cx + 65, tgw_cy, fw_cx - 75, fw_cy, "flow-inspect")
     flows.append((s, d, GREEN, "2.2s"))
+
+    # --- intra-network-account routing: the TGW is the attachment hub ---
+    # NAT/egress, SD-WAN (HA) and Shared Services all attach to the TGW; an
+    # attachment "bus" runs in the gap between the two node rows.
+    bus_y = ny + 95
+    ss_cx = nx + 322 + (nw - 336) / 2
+    g.append(_flow(tgw_cx, bus_y, ss_cx, bus_y, "flow-attach")[0])               # attachment bus
+    g.append(_flow(tgw_cx, tgw_y + tgw_h, tgw_cx, ny + 100, "flow-egress")[0])   # TGW -> NAT/egress
+    g.append(_flow(fw_cx, bus_y, fw_cx, ny + 100, "flow-sdwan")[0])              # bus -> SD-WAN (HA)
+    g.append(_flow(ss_cx, bus_y, ss_cx, ny + 100, "flow-attach")[0])            # bus -> Shared Services
+    # Security account = telemetry/logging plane (flow logs, CloudTrail, findings
+    # -> Log Archive via delegated admin), NOT a TGW data path -> dashed log line.
+    g.append(_flow(fw_cx, ny + 34, ss_cx, ny + 34, "flow-log",
+                   mid=(fw_cx, ny + 24, ss_cx, ny + 24))[0])
+    g.append(_text((fw_cx + ss_cx) / 2, ny + 20, "logs · findings → Security acct",
+                   MUT, 7.5, "600", "middle"))
 
     svg = "".join(g) + "".join(f for f, *_ in flows)
     packets = "".join(_packet(d, c, dur) for _, d, c, dur in flows[:2])
@@ -267,6 +285,20 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
     # 3) east-west AZ-a app <-> AZ-b app, inspected at TGW/firewall
     sg, d = _flow(*app_anchor["a"], *app_anchor["b"], "flow-peer", mid=(app_anchor["a"][0], py + 300, app_anchor["b"][0], py + 300)); s.append(sg); flows.append((d, TEAL, "3.0s"))
 
+    # 4) Shared Services VPC attaches to the TGW (any-to-any via the firewall),
+    #    routed up the empty left gutter so it does not cross the other bands.
+    for (a, b) in (((300, 854), (258, 854)), ((258, 854), (258, 180)),
+                   ((258, 180), (750, 180)), ((750, 180), (750, 144))):
+        s.append(_flow(a[0], a[1], b[0], b[1], "flow-attach")[0])
+    s.append(_text(14, 540, "Shared Svcs", AMBER, 9, "700"))
+    s.append(_text(14, 552, "→ TGW attach", AMBER, 8.5, "500"))
+    # 5) Security account = telemetry plane: VPC Flow Logs / CloudTrail / GuardDuty
+    #    / Config -> Log Archive (delegated admin). NOT a data path -> dashed log.
+    for (a, b) in (((300, 406), (240, 406)), ((240, 406), (240, 978)), ((240, 978), (300, 978))):
+        s.append(_flow(a[0], a[1], b[0], b[1], "flow-log")[0])
+    s.append(_text(14, 700, "Flow Logs · CloudTrail", MUT, 8.5, "600"))
+    s.append(_text(14, 712, "GuardDuty → Security", MUT, 8.5, "500"))
+
     # step labels
     s.append(_text(470, 200, "① ingress (DC → TGW → firewall → app)", GREEN, 9.5, "600"))
     s.append(_text(980, 200, "② egress (app → TGW → firewall → NAT → IGW)", BLUE, 9.5, "600"))
@@ -276,8 +308,9 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
     legend = []
     for i, (lab, col, cls) in enumerate([
             ("DX (primary)", AMBER, "flow-dx"), ("Inspection (firewall)", GREEN, "flow-inspect"),
-            ("Egress → NAT → IGW", BLUE, "flow-egress"), ("East-west (inspected)", TEAL, "flow-peer")]):
-        x = 320 + i * 270
+            ("Egress → NAT → IGW", BLUE, "flow-egress"), ("East-west (inspected)", TEAL, "flow-peer"),
+            ("TGW attach (Shared Svcs)", AMBER, "flow-attach"), ("Logs → Security", MUT, "flow-log")]):
+        x = 120 + i * 228
         legend.append(f'<line x1="{x}" y1="{H-20}" x2="{x+24}" y2="{H-20}" class="flow {cls}"/>')
         legend.append(_text(x + 30, H - 16, lab, MUT, 10, "500"))
 
@@ -337,12 +370,13 @@ def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdw
     packets = "".join(_packet(d, c, dur) for d, c, dur in flows)
 
     legend = []
-    lx, ly = 470, 905
+    lx, ly = 300, 905
     for i, (lab, col, cls) in enumerate([
             ("DX (primary)", AMBER, "flow-dx"), ("TGW peering", TEAL, "flow-peer"),
-            ("Inspection (firewall)", GREEN, "flow-inspect"), ("Egress/NAT", BLUE, "flow-egress"),
-            ("VPN (backup)", RED, "flow-vpn"), ("SD-WAN overlay", TEAL, "flow-sdwan")]):
-        x = lx + i * 165
+            ("TGW attach", AMBER, "flow-attach"), ("Inspection (firewall)", GREEN, "flow-inspect"),
+            ("Egress/NAT", BLUE, "flow-egress"), ("VPN (backup)", RED, "flow-vpn"),
+            ("SD-WAN overlay", TEAL, "flow-sdwan"), ("Logs → Security", MUT, "flow-log")]):
+        x = lx + i * 150
         legend.append(f'<line x1="{x}" y1="{ly}" x2="{x+24}" y2="{ly}" class="flow {cls}"/>')
         legend.append(_text(x + 30, ly + 4, lab, MUT, 10, "500"))
 
