@@ -9,6 +9,7 @@ import html
 import json
 import os
 
+import cidr
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -191,10 +192,10 @@ ui.hero(design, n_total, waf_overall, cost["total"])
 if st.session_state.get("_flash"):
     st.toast(st.session_state.pop("_flash"), icon="✅")
 
-(tab_design, tab_guide, tab_sim, tab_waf, tab_iac, tab_road, tab_play, tab_live, tab_drift,
- tab_scen, tab_advisor, tab_ref) = st.tabs(
+(tab_design, tab_guide, tab_sim, tab_waf, tab_iac, tab_road, tab_play, tab_cidr, tab_live,
+ tab_drift, tab_scen, tab_advisor, tab_ref) = st.tabs(
     ["🎨 Design Studio", "📖 Guide", "🧪 Simulator", "🏛️ Well-Architected", "🚀 IaC",
-     "🗺️ Roadmap", "🎬 Playbooks", "📡 Live Estate", "📈 Drift", "🗂️ Scenarios",
+     "🗺️ Roadmap", "🎬 Playbooks", "🧮 CIDR", "📡 Live Estate", "📈 Drift", "🗂️ Scenarios",
      "🤖 AI Advisor", "📚 Reference"])
 
 with tab_guide:
@@ -203,6 +204,9 @@ with tab_guide:
 with tab_play:
     playbooks.render(design, {"cost": cost, "scores": scores, "n_total": n_total,
                               "assessment": assessment, "waf_overall": waf_overall})
+
+with tab_cidr:
+    cidr.render(design)
 
 # ============================== DESIGN STUDIO ==============================
 

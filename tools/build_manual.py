@@ -178,6 +178,7 @@ table(["Area", "What it provides"], [
     ["Simulator", "Side-by-side comparison of all account strategies + growth stress-test"],
     ["Playbooks", "Scenario lifecycle simulations: M&A integration (DX+SD-WAN connect, MGN VM migration), replicate/absorb, hybrid network, divestiture, expansion, compliance, scale-out; one-click replication IaC"],
     ["Guide", "In-app user guide: quick start, per-tab how-to, workflows, FAQ"],
+    ["CIDR", "IP address planner: allocate supernet→VPC→subnet with a utilization treemap, overlap check, inspect, subdivide"],
     ["Well-Architected", "25 weighted checks across 6 pillars, each mapped to an official best practice; one-click remediations"],
     ["IaC", "Export Terraform / LZA config / Control Tower checklist; reverse-import and score existing IaC"],
     ["Live Estate", "Read-only AWS Organizations scan with confidence-rated signals; Control Tower confirmed via API"],

@@ -118,6 +118,12 @@ def render():
          "Chat with a principal-architect AI (Claude or OpenAI) that already has your design, scores, "
          "and cost as context. One-click prompts: review the design, compare to best practice, build a "
          "Day-1/2 roadmap, or turn WAF findings into a prioritized remediation plan."),
+        ("🧮 CIDR",
+         "An **IP address planner**. *Allocate* carves a supernet (your IPAM pool) into per-VPC and "
+         "per-subnet blocks and shows a treemap of exactly **how the address space is utilized** "
+         "(plus usable-host counts, AWS reserving 5/subnet) with a CSV export; *Overlap check* finds "
+         "colliding CIDRs across accounts/datacenters (a common M&A pitfall); plus *Inspect* and "
+         "*Subdivide* helpers."),
         ("📚 Reference",
          "Quick cheat sheets: account-strategy trade-offs, Control Tower vs LZA vs custom, the "
          "foundational OU layout, and the landing-zone non-negotiables."),
