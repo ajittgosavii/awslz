@@ -257,14 +257,116 @@ def _plan_csv(rows: list) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _acquisition_package(design, hub: str, dx_speed: str, dx_redundant: bool, b_vms: int) -> bytes:
+def _networking_setup_guide(hub, dx_speed, dx_redundant, env_cidrs=None, b_vms=68,
+                            dc_cidr="10.100.0.0/16", b_cidr="10.20.5.0/24"):
+    """Detailed, step-by-step networking setup guide (Markdown) for the M&A scenario:
+    connect a new AWS account to the datacenter via Direct Connect over SD-WAN, and
+    provide the replication path for the AWS MGN migration."""
+    ec = env_cidrs or {}
+    is_cw = hub == "AWS Cloud WAN"
+    seg_word = "Cloud WAN segments" if is_cw else "Transit Gateway route tables"
+    env_lines = []
+    for ekey, elabel, _c, _n in _env_split(3):
+        c = ec.get(ekey, {})
+        vcidr = c.get("vpc_cidr", "(allocate)")
+        subs = c.get("subnets", {})
+        sub_str = ", ".join(f"{t} {subs.get(t, '—')}" for t in ("public", "app", "db"))
+        env_lines.append(f"- **{elabel}** — VPC `{vcidr}` · {sub_str}")
+    envs_md = "\n".join(env_lines)
+    redundancy = ("two connections at separate DX locations (or a LAG)" if dx_redundant
+                  else "a single connection (add a second for production resilience)")
+
+    return f"""# Networking setup guide — M&A integration
+
+Connect Company A's **new AWS account** to its **datacenter** over **Direct Connect
+({dx_speed})** with an **SD-WAN** overlay into a **{hub}** hub, and provide the
+replication path to migrate **{int(b_vms)} VMs from Company B with AWS MGN**.
+
+> Reviewable runbook with concrete AWS steps. Replace ASNs, VLANs, IP/CIDRs, and
+> SD-WAN AMIs with your values. Order matters — follow the phases top to bottom.
+
+## 0. Prerequisites
+- A dedicated **Network account** under Company A's organization (Infrastructure OU).
+- Approved **address plan** (no overlaps) — datacenter `{dc_cidr}`, Company B `{b_cidr}`,
+  and the new environment VPCs (below). Validate with the CIDR tab's overlap check.
+- An on-prem/SD-WAN edge that can run **BGP**, and a public IP for the VPN backup.
+- IAM access to the Network account; quotas for DX VIFs, TGW attachments, VPN.
+
+## 1. Order Direct Connect
+1. In the Network account, request **Direct Connect** ({dx_speed}) at your DX location:
+   provision {redundancy}.
+2. Complete the **cross-connect** with the colo/partner; wait for the link to come **up**.
+3. Note the **connection ID** (`dxcon-…`) — it feeds the Terraform `dx_connection_id`.
+
+## 2. Build the AWS hub — {hub}
+{"1. Create a **Cloud WAN global network** and **core network**; author a core-network **policy** with one **segment per environment** (production / stage / development) and an attachment policy." if is_cw else "1. Create a **Transit Gateway** (`amazon_side_asn`, default route table association/propagation enabled)."}
+2. This hub provides **any-to-any** connectivity for the VPC spokes, the datacenter
+   (via DX), and the SD-WAN overlay.
+
+## 3. Direct Connect Gateway + transit VIF
+1. Create a **Direct Connect Gateway** (`aws_dx_gateway`) with your `amazon_side_asn`.
+2. **Associate** it with the {hub} (`aws_dx_gateway_association`), allowing the on-prem
+   prefixes (`{dc_cidr}`).
+3. Create a **transit virtual interface** on the DX connection (VLAN + your customer ASN).
+   {"Add a second VIF on the redundant connection." if dx_redundant else "Add a second VIF/connection later for HA."}
+
+## 4. SD-WAN overlay
+1. Deploy an **HA pair of SD-WAN appliances** (EC2) in a transit VPC subnet; set
+   `source_dest_check = false`; install the vendor license/AMI.
+2. Integrate with the hub using **Transit Gateway Connect** (`aws_ec2_transit_gateway_connect`
+   + `connect_peer`, GRE + BGP) so branch sites reach the hub through the overlay, with
+   **Direct Connect as the underlay**.
+
+## 5. Site-to-Site VPN (backup path)
+1. Create a **Customer Gateway** (on-prem/SD-WAN public IP, customer ASN) and a
+   **VPN connection** to the {hub}.
+2. Tune BGP so the VPN is the **lower-preference** path; it activates only if DX drops.
+
+## 6. Environment segmentation (Dev / Stage / Production)
+Keep environments isolated using **{seg_word}** so prod can't talk to dev by default:
+{envs_md}
+- Give each environment its own {("segment" if is_cw else "route table")}; share only what's
+  required (e.g. Shared Services, egress). Production gets the strictest SCPs/NACLs.
+
+## 7. Routing & BGP
+- Advertise on-prem `{dc_cidr}` over the transit VIF; advertise the AWS env CIDRs back.
+- Prefer **DX over VPN** via BGP local-preference / AS-path; verify failover.
+- Avoid overlapping routes — the env CIDRs above are carved from one supernet.
+
+## 8. Centralized egress & inspection
+- Route environment egress through a **centralized egress VPC** (NAT) in the Network
+  account; optionally insert a **firewall / inspection VPC** for east-west and DC traffic.
+
+## 9. Connectivity for the AWS MGN migration
+1. Company B's source servers must reach the **MGN staging area** in the target account.
+   Use the DX/SD-WAN path (or a temporary VPN) — open the MGN replication ports.
+2. Place the MGN **staging subnet** in the appropriate environment VPC (usually a
+   non-prod/landing subnet) and map source → target subnets/SGs in the launch template.
+3. After cutover, the migrated workloads sit behind the same hub and segmentation.
+
+## 10. Validation & monitoring
+- **Reachability Analyzer** from a spoke ENI to the datacenter and between environments.
+- Confirm **BGP sessions** (DX + VPN), route propagation, and DX **failover** to VPN.
+- Enable **VPC Flow Logs**, **Network Manager** monitoring, and CloudWatch alarms on the
+  DX connection and TGW/Cloud WAN attachments.
+
+## Appendix
+- Generate the matching Terraform from the playbook: **connectivity.tf** (this hub + DX +
+  SD-WAN + VPN) and **vpcs.tf / spoke_attachments.tf** (the env VPCs above).
+- Re-run the **CIDR overlap check** whenever you add a datacenter, branch, or acquired range.
+"""
+
+
+def _acquisition_package(design, hub: str, dx_speed: str, dx_redundant: bool, b_vms: int,
+                         plan_rows=None, env_cidrs=None) -> bytes:
     """Bundle every integration artifact into one downloadable .zip:
-    CIDR plan + VPC IaC + connectivity.tf + integration (org) IaC + MGN runbook."""
+    CIDR plan + VPC IaC + connectivity.tf + networking guide + org IaC + MGN runbook."""
     import io
     import zipfile
 
     region = design.regions[0] if getattr(design, "regions", None) else "us-east-1"
-    plan_rows, _ = cidr.allocate_plan("10.0.0.0/8", 16, 3, 24, 3, ["public", "app", "db"])
+    if not plan_rows:
+        env_cidrs, plan_rows = _env_cidr_plan()
     n_apps = max(1, math.ceil(int(b_vms) / 6))
     rb_md = _mgn_runbook_md(int(b_vms), 10, n_apps, region, "company-a")
     rb_csv = _mgn_runbook_csv(int(b_vms), 10, n_apps)
@@ -277,7 +379,7 @@ under the existing landing zone, and migrate {int(b_vms)} VMs with AWS MGN.
 
 ## Contents
 ```
-network/      # IP plan + VPC/subnet IaC + hybrid connectivity (DX + SD-WAN + {hub})
+network/      # NETWORKING-SETUP.md guide + IP plan + VPC/subnet IaC + connectivity (DX + SD-WAN + {hub})
 org/          # vend the integration account + replicate the landing-zone blueprint
 migration/    # per-wave AWS MGN cutover runbook for the {int(b_vms)} VMs
 ```
@@ -300,6 +402,8 @@ turnkey deployment.
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("README.md", master)
+        z.writestr("network/NETWORKING-SETUP.md",
+                   _networking_setup_guide(hub, dx_speed, dx_redundant, env_cidrs, b_vms))
         z.writestr("network/ip-plan.csv", _plan_csv(plan_rows))
         _merge_zip(z, iac.vpc_network_bundle(plan_rows, region), "network/")
         z.writestr("network/connectivity.tf",
@@ -805,16 +909,213 @@ def _hybrid_network(design, derived):
                        use_container_width=True, key="conn_tf_net")
 
 
-def _render_network_graph(vpcs, dcs, hub, dx_speed, sdwan, branches, key="net"):
+_ENV_DEFS = [("prod", "Production", "#B0084D"), ("stage", "Stage", "#C47400"), ("dev", "Dev", "#2A7DB0")]
+_SUBNET_TIERS = {"public": "#3F8624", "app": "#1A476F", "db": "#6E7A8C"}
+
+
+def _env_split(vpcs):
+    """Always return the three environments with a VPC count each (Prod gets extras)."""
+    base = max(1, vpcs // 3)
+    rem = max(0, vpcs - base * 3)
+    counts = {"prod": base + rem, "stage": base, "dev": base}
+    return [(k, lbl, col, counts[k]) for k, lbl, col in _ENV_DEFS]
+
+
+def _env_cidr_plan(supernet="10.20.0.0/16", vpc_prefix=18, subnet_prefix=22):
+    """Allocate one VPC block per environment (Prod/Stage/Dev) with public/app/db
+    subnets. Returns (env_cidrs, rows) — env_cidrs feeds the diagram, rows feed the
+    VPC/subnet IaC and the acquisition package."""
+    rows, _summary = cidr.allocate_plan(supernet, vpc_prefix, 3, subnet_prefix, 1,
+                                        ["public", "app", "db"], ["Production", "Stage", "Dev"])
+    name_to_key = {"Production": "prod", "Stage": "stage", "Dev": "dev"}
+    env_cidrs = {}
+    for r in rows:
+        k = name_to_key.get(r["VPC"])
+        if not k:
+            continue
+        env_cidrs.setdefault(k, {"vpc_cidr": r["VPC CIDR"], "subnets": {}})
+        env_cidrs[k]["subnets"][r["Tier"]] = r["Subnet CIDR"]
+    return env_cidrs, rows
+
+
+def _ou_structure_dot(design, include_quarantine=False):
+    """Graphviz OU tree for the landing zone, with Prod/Stage/Dev environment OUs."""
+    INK, NAVY, GREEN, TEAL, AMBER, GREY, RED = (
+        "#232F3E", "#1A476F", "#3F8624", "#2DD4BF", "#FF9900", "#6E7A8C", "#B0084D")
+    dot = ['digraph ou {',
+           'rankdir=TB; bgcolor="transparent"; nodesep="0.28"; ranksep="0.55";',
+           'node [fontname="Helvetica", fontcolor="white", style="filled,rounded", shape="box", '
+           'color="#3A4555", penwidth="1.1", margin="0.16,0.07", fontsize="10"];',
+           'edge [color="#5A6B86", arrowsize="0.6"];',
+           f'mgmt [label="Management account\\n(billing · org root)", fillcolor="{INK}", '
+           f'penwidth="2", color="#FF9900"];',
+           f'ou_sec [label="Security OU", fillcolor="{NAVY}", shape="folder"];',
+           f'log [label="Log Archive", fillcolor="{GREEN}"];',
+           f'audit [label="Audit / Security Tooling", fillcolor="{GREEN}"];',
+           'mgmt -> ou_sec; ou_sec -> log; ou_sec -> audit;',
+           f'ou_inf [label="Infrastructure OU", fillcolor="{NAVY}", shape="folder"];',
+           f'net [label="Network\\n(DX · SD-WAN · {design.network_pattern})", fillcolor="{TEAL}", fontcolor="#0B1220"];',
+           f'shared [label="Shared Services", fillcolor="{TEAL}", fontcolor="#0B1220"];',
+           'mgmt -> ou_inf; ou_inf -> net; ou_inf -> shared;',
+           f'ou_wl [label="Workloads OU", fillcolor="{NAVY}", shape="folder"]; mgmt -> ou_wl;']
+    for ekey, elabel, ecolor in _ENV_DEFS:
+        dot.append(f'ou_{ekey} [label="{elabel} OU", fillcolor="{ecolor}", shape="folder"];')
+        dot.append(f'ou_wl -> ou_{ekey};')
+        dot.append(f'acc_{ekey} [label="workload accounts\\n(per {elabel})", fillcolor="{AMBER}", fontcolor="#232F3E"];')
+        dot.append(f'ou_{ekey} -> acc_{ekey};')
+    dot.append(f'ou_sand [label="Sandbox OU", fillcolor="{GREY}", shape="folder"]; mgmt -> ou_sand;')
+    dot.append(f'ou_susp [label="Suspended OU", fillcolor="#4A2530", shape="folder"]; mgmt -> ou_susp;')
+    if include_quarantine:
+        dot.append(f'ou_acq [label="Acquired / Quarantine OU\\n(permissive SCP)", fillcolor="{RED}", shape="folder"]; '
+                   'mgmt -> ou_acq;')
+        dot.append(f'acc_b [label="Company B accounts\\n(migrated → baselined → graduated)", fillcolor="{GREY}"]; '
+                   'ou_acq -> acc_b;')
+    dot.append('}')
+    return "\n".join(dot)
+
+
+def _render_network_graph(vpcs, dcs, hub, dx_speed, sdwan, branches, key="net", env_cidrs=None):
+    options = ["📐 Aligned diagram", "🅰️ AWS icons"]
+    if _HAS_AGRAPH:
+        options.append("🖐️ Interactive (drag)")
+    view = st.radio("Diagram view", options, horizontal=True, key=f"net_view_{key}",
+                    label_visibility="collapsed")
+
+    if view.startswith("🅰️"):
+        png = _aws_icon_diagram(vpcs, dcs, hub, dx_speed, sdwan, branches, env_cidrs)
+        if png:
+            st.image(png, use_container_width=True)
+            st.caption("Rendered with official AWS Architecture Icons (diagrams library).")
+            return
+        st.info("AWS icon view needs the `diagrams` package + the Graphviz binary — "
+                "showing the aligned diagram instead.", icon="ℹ️")
+    elif view.startswith("🖐️") and _HAS_AGRAPH:
+        _interactive_net(vpcs, dcs, hub, dx_speed, sdwan, branches, env_cidrs)
+        return
+
+    st.graphviz_chart(_aligned_dot(vpcs, dcs, hub, dx_speed, sdwan, branches, env_cidrs),
+                      use_container_width=True)
+    st.caption("On-premises → Direct Connect / SD-WAN → Network-account hub → workload VPCs, "
+               "segmented by environment (Dev / Stage / Production).")
+
+
+def _aws_icon_diagram(vpcs, dcs, hub, dx_speed, sdwan, branches, env_cidrs=None):
+    """Render the topology with official AWS Architecture Icons via the `diagrams`
+    library (needs the Graphviz binary). Returns PNG bytes, or None on any failure
+    so the caller can fall back to the aligned diagram."""
+    try:
+        import os
+        import tempfile
+        from diagrams import Cluster, Diagram, Edge
+        from diagrams.aws.compute import EC2
+        from diagrams.aws.network import DirectConnect, PrivateSubnet, PublicSubnet, TransitGateway, VPC
+        from diagrams.generic.place import Datacenter
+    except Exception:
+        return None
+    ec = env_cidrs or {}
+    n_br = min(branches, 6) if sdwan else 0
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "topology")
+            with Diagram("", show=False, filename=path, outformat="png", direction="LR",
+                         graph_attr={"bgcolor": "transparent", "pad": "0.4", "ranksep": "1.4",
+                                     "nodesep": "0.5"}):
+                with Cluster("On-premises"):
+                    dc_nodes = [Datacenter(f"Datacenter {i + 1}") for i in range(dcs)]
+                    br_nodes = [Datacenter(f"Branch {k + 1}") for k in range(n_br)]
+                with Cluster("Network account"):
+                    dxgw = DirectConnect("DX Gateway")
+                    hub_node = TransitGateway(hub)
+                    sdwan_node = EC2("SD-WAN (HA)") if sdwan else None
+                env_vpcs = []
+                with Cluster("Workload accounts"):
+                    for ekey, elabel, _c, _n in _env_split(vpcs):
+                        c = ec.get(ekey, {})
+                        vcidr, subs = c.get("vpc_cidr", ""), c.get("subnets", {})
+                        with Cluster(f"{elabel}" + (f" {vcidr}" if vcidr else "")):
+                            v = VPC(f"VPC · {elabel}")
+                            pub = PublicSubnet(("public " + subs.get("public", "")).strip())
+                            app = PrivateSubnet(("app " + subs.get("app", "")).strip())
+                            db = PrivateSubnet(("db " + subs.get("db", "")).strip())
+                            v - pub
+                            v - app
+                            v - db
+                            env_vpcs.append(v)
+                for dc in dc_nodes:
+                    dc >> Edge(label=dx_speed) >> dxgw
+                dxgw >> Edge(label="transit VIF") >> hub_node
+                if sdwan and sdwan_node is not None:
+                    for br in br_nodes:
+                        br >> Edge(label="SD-WAN") >> sdwan_node
+                    sdwan_node >> Edge(label="overlay") >> hub_node
+                for v in env_vpcs:
+                    hub_node >> Edge(label="attachment") >> v
+            with open(path + ".png", "rb") as f:
+                return f.read()
+    except Exception:
+        return None
+
+
+def _interactive_net(vpcs, dcs, hub, dx_speed, sdwan, branches, env_cidrs=None):
     INK, AMBER, TEAL, NAVY, GREY, SLATE = "#232F3E", "#FF9900", "#2DD4BF", "#1A476F", "#6E7A8C", "#3A4555"
-    n_vpc_shown = min(vpcs, 12)
+    ec = env_cidrs or {}
     n_br_shown = min(branches, 10) if sdwan else 0
+    nodes, edges, details = [], [], {}
 
-    interactive = (st.toggle("🖐️ Interactive (drag-to-rearrange) view", value=False, key=f"net_int_{key}")
-                   if _HAS_AGRAPH else False)
+    def n(nid, label, color, shape="box"):
+        nodes.append(Node(id=nid, label=label, color=color, shape=shape, font=_net_font(color), margin=8))
 
-    # ---- Aligned architecture diagram (Graphviz dot, clustered) — default ----
-    if not interactive:
+    def e(a, b, label=""):
+        edges.append(Edge(source=a, target=b, label=label, color="#5A6B86"))
+
+    n("hub", hub, INK, shape="hexagon")
+    details["hub"] = f"### {hub}\nAny-to-any hub in the Network account; spokes and on-prem connect here."
+    n("dxgw", "Direct Connect Gateway", NAVY, shape="diamond")
+    e("dxgw", "hub", "transit VIF")
+    details["dxgw"] = "### Direct Connect Gateway\nAssociates the DX transit VIF with the hub."
+    for i in range(dcs):
+        n(f"dc{i}", f"Datacenter {i + 1}", GREY)
+        e(f"dc{i}", "dxgw", dx_speed if i == 0 else "")
+        details[f"dc{i}"] = f"### On-prem datacenter {i + 1}\nConnected over Direct Connect ({dx_speed})."
+    for ekey, elabel, ecolor, ecount in _env_split(vpcs):
+        c = ec.get(ekey, {})
+        vcidr, subs = c.get("vpc_cidr", ""), c.get("subnets", {})
+        n(f"env_{ekey}", elabel, ecolor, shape="diamond")
+        e("hub", f"env_{ekey}", "attachment" if ekey == "prod" else "")
+        details[f"env_{ekey}"] = (f"### {elabel} environment\nSegmented workload environment "
+                                  f"(own route table / segment). VPC {vcidr or '—'}.")
+        n(f"vpc_{ekey}", f"VPC · {elabel}" + (f"\n{vcidr}" if vcidr else ""), AMBER)
+        e(f"env_{ekey}", f"vpc_{ekey}")
+        for tier, tcolor in _SUBNET_TIERS.items():
+            scidr = subs.get(tier, "")
+            n(f"{tier}_{ekey}", f"{tier} subnet" + (f"\n{scidr}" if scidr else ""), tcolor)
+            e(f"vpc_{ekey}", f"{tier}_{ekey}")
+        if ecount > 1:
+            n(f"more_{ekey}", f"+{ecount - 1} VPCs", GREY)
+            e(f"env_{ekey}", f"more_{ekey}")
+    if sdwan:
+        n("sdwan", "SD-WAN appliances (HA)", TEAL, shape="diamond")
+        e("sdwan", "hub", "overlay")
+        details["sdwan"] = "### SD-WAN appliances\nHA pair in the transit VPC; terminates branch overlays."
+        for k in range(n_br_shown):
+            n(f"br{k}", f"Branch {k + 1}", SLATE)
+            e(f"br{k}", "sdwan", "SD-WAN" if k == 0 else "")
+            details[f"br{k}"] = "### Branch / remote site\nConnected via the SD-WAN overlay."
+    cfg = Config(width="100%", height=480, directed=True, physics=True,
+                 nodeHighlightBehavior=True, highlightColor=AMBER,
+                 node={"labelProperty": "label"}, link={"renderLabel": True})
+    clicked = agraph(nodes=nodes, edges=edges, config=cfg)
+    if clicked and clicked in details:
+        st.info(details[clicked])
+    else:
+        st.caption("💡 Drag nodes to rearrange · click a node for details.")
+
+
+def _aligned_dot(vpcs, dcs, hub, dx_speed, sdwan, branches, env_cidrs=None):
+    INK, AMBER, TEAL, NAVY, GREY, SLATE = "#232F3E", "#FF9900", "#2DD4BF", "#1A476F", "#6E7A8C", "#3A4555"
+    ec = env_cidrs or {}
+    n_br_shown = min(branches, 10) if sdwan else 0
+    if True:
         dot = ['digraph net {',
                'rankdir=LR; bgcolor="transparent"; pad="0.35"; nodesep="0.32"; ranksep="1.1"; '
                'splines="spline";',
@@ -838,12 +1139,24 @@ def _render_network_graph(vpcs, dcs, hub, dx_speed, sdwan, branches, key="net"):
         if sdwan:
             dot.append(f'sdwan [label="SD-WAN\\nappliances (HA)", fillcolor="{TEAL}", fontcolor="#0B1220"];')
         dot.append('}')
-        dot.append('subgraph cluster_wl { label="Workload accounts"; fontcolor="#8C9CB8"; '
-                   'color="#C47400"; style="rounded";')
-        for j in range(n_vpc_shown):
-            dot.append(f'vpc{j} [label="VPC {j + 1}", fillcolor="{AMBER}", fontcolor="#232F3E"];')
-        if vpcs > n_vpc_shown:
-            dot.append(f'vpcmore [label="+{vpcs - n_vpc_shown} VPCs", fillcolor="{GREY}"];')
+        dot.append('subgraph cluster_wl { label="Workload accounts — per environment"; '
+                   'fontcolor="#8C9CB8"; color="#C47400"; style="rounded";')
+        tier_colors = {"public": "#3F8624", "app": "#1A476F", "db": "#6E7A8C"}
+        for ekey, elabel, ecolor, ecount in _env_split(vpcs):
+            c = ec.get(ekey, {})
+            vcidr, subs = c.get("vpc_cidr", ""), c.get("subnets", {})
+            dot.append(f'subgraph cluster_{ekey} {{ label="{elabel}{(" · " + vcidr) if vcidr else ""}"; '
+                       f'fontcolor="{ecolor}"; color="{ecolor}"; style="rounded,bold";')
+            dot.append(f'vpc_{ekey} [label="VPC · {elabel}", fillcolor="{AMBER}", fontcolor="#232F3E"];')
+            for tier, tcolor in tier_colors.items():
+                scidr = subs.get(tier, "")
+                slbl = f"{tier} subnet\\n{scidr}" if scidr else f"{tier} subnet\\n(multi-AZ)"
+                dot.append(f'{tier}_{ekey} [label="{slbl}", fillcolor="{tcolor}", fontsize="9"];')
+                dot.append(f'vpc_{ekey} -> {tier}_{ekey} [arrowhead="none", color="#3A4555"];')
+            if ecount > 1:
+                dot.append(f'more_{ekey} [label="+{ecount - 1} VPCs", fillcolor="{GREY}", fontsize="9"];')
+                dot.append(f'vpc_{ekey} -> more_{ekey} [style="dotted", arrowhead="none", color="#3A4555"];')
+            dot.append('}')
         dot.append('}')
         for i in range(dcs):
             dot.append(f'dc{i} -> dxgw [label="{dx_speed if i == 0 else ""}"];')
@@ -854,57 +1167,10 @@ def _render_network_graph(vpcs, dcs, hub, dx_speed, sdwan, branches, key="net"):
             if branches > n_br_shown:
                 dot.append('brmore -> sdwan;')
             dot.append('sdwan -> hub [label="overlay"];')
-        for j in range(n_vpc_shown):
-            dot.append(f'hub -> vpc{j} [label="{"attachment" if j == 0 else ""}"];')
-        if vpcs > n_vpc_shown:
-            dot.append('hub -> vpcmore;')
+        for ekey, _lbl, _c, _n in _env_split(vpcs):
+            dot.append(f'hub -> vpc_{ekey} [label="{"attachment" if ekey == "prod" else ""}"];')
         dot.append('}')
-        st.graphviz_chart("\n".join(dot), use_container_width=True)
-        st.caption("On-premises → Direct Connect / SD-WAN → Network-account hub → workload VPCs."
-                   + ("  Toggle the interactive view above to drag nodes." if _HAS_AGRAPH else ""))
-        return
-
-    # ---- Interactive draggable view (de-cluttered labels) ----
-    nodes, edges, details = [], [], {}
-
-    def n(nid, label, color, shape="box"):
-        nodes.append(Node(id=nid, label=label, color=color, shape=shape, font=_net_font(color), margin=8))
-
-    def e(a, b, label=""):
-        edges.append(Edge(source=a, target=b, label=label, color="#5A6B86"))
-
-    n("hub", hub, INK, shape="hexagon")
-    details["hub"] = f"### {hub}\nAny-to-any hub in the Network account; spokes and on-prem connect here."
-    n("dxgw", "Direct Connect Gateway", NAVY, shape="diamond")
-    e("dxgw", "hub", "transit VIF")
-    details["dxgw"] = "### Direct Connect Gateway\nAssociates the DX transit VIF with the hub."
-    for i in range(dcs):
-        n(f"dc{i}", f"Datacenter {i + 1}", GREY)
-        e(f"dc{i}", "dxgw", dx_speed if i == 0 else "")
-        details[f"dc{i}"] = f"### On-prem datacenter {i + 1}\nConnected over Direct Connect ({dx_speed})."
-    for j in range(n_vpc_shown):
-        n(f"vpc{j}", f"VPC {j + 1}", AMBER)
-        e("hub", f"vpc{j}")
-        details[f"vpc{j}"] = "### VPC spoke\nWorkload account VPC attached to the hub."
-    if vpcs > n_vpc_shown:
-        n("vpcmore", f"+{vpcs - n_vpc_shown} VPCs", GREY)
-        e("hub", "vpcmore")
-    if sdwan:
-        n("sdwan", "SD-WAN appliances (HA)", TEAL, shape="diamond")
-        e("sdwan", "hub", "overlay")
-        details["sdwan"] = "### SD-WAN appliances\nHA pair in the transit VPC; terminates branch overlays."
-        for k in range(n_br_shown):
-            n(f"br{k}", f"Branch {k + 1}", SLATE)
-            e(f"br{k}", "sdwan", "SD-WAN" if k == 0 else "")
-            details[f"br{k}"] = "### Branch / remote site\nConnected via the SD-WAN overlay."
-    cfg = Config(width="100%", height=480, directed=True, physics=True,
-                 nodeHighlightBehavior=True, highlightColor=AMBER,
-                 node={"labelProperty": "label"}, link={"renderLabel": True})
-    clicked = agraph(nodes=nodes, edges=edges, config=cfg)
-    if clicked and clicked in details:
-        st.info(details[clicked])
-    else:
-        st.caption("💡 Drag nodes to rearrange · click a node for details.")
+    return "\n".join(dot)
 
 
 # ===========================================================================
@@ -1042,9 +1308,45 @@ def _ma_integration(design, derived):
     n1.metric("Connectivity cost", f"${net_monthly:,.0f}/mo")
     n2.metric("One-time migration cost", f"${migration_once:,.0f}")
 
-    st.markdown("###### Target topology  ·  _drag to rearrange, click for detail_")
-    _render_network_graph(vpcs=5, dcs=1, hub=hub, dx_speed=dx_speed, sdwan=True, branches=3,
-                           key="integration")
+    # --- Address plan (CIDR) for the three environments ---
+    st.markdown("###### Address plan — per environment (Dev / Stage / Production)")
+    ap1, ap2 = st.columns([1, 2])
+    supernet = ap1.text_input("New-workloads supernet (IPAM pool)", value="10.20.0.0/16",
+                              key="int_supernet")
+    try:
+        env_cidrs, plan_rows = _env_cidr_plan(supernet)
+    except Exception as ex:  # noqa: BLE001
+        ap2.error(f"Invalid supernet: {ex}")
+        env_cidrs, plan_rows = {}, []
+    if plan_rows:
+        ap2.dataframe(
+            [{"Environment": r["VPC"], "VPC CIDR": r["VPC CIDR"], "Subnet": r["Tier"],
+              "Subnet CIDR": r["Subnet CIDR"], "Usable (AWS)": r["Usable (AWS)"]} for r in plan_rows],
+            use_container_width=True, hide_index=True)
+    # overlap check vs Company B + datacenter
+    oc1, oc2 = st.columns(2)
+    company_b = oc1.text_input("Company B existing CIDR(s)", value="10.20.5.0/24, 172.31.0.0/16",
+                               key="int_companyb")
+    dc_cidr = oc2.text_input("Datacenter CIDR(s)", value="10.100.0.0/16", key="int_dc")
+    check_list = [r["Subnet CIDR"] for r in plan_rows] + \
+        [c.strip() for c in (company_b + "," + dc_cidr).split(",") if c.strip()]
+    overlaps, invalid = cidr.find_overlaps(check_list)
+    if invalid:
+        st.warning("Unparseable CIDR(s): " + ", ".join(invalid), icon="⚠️")
+    if overlaps:
+        st.error(f"❌ {len(overlaps)} overlap(s) — re-address before peering/migration: "
+                 + "; ".join(f"{a} ↔ {b}" for a, b in overlaps[:6]))
+    else:
+        st.success("✅ No overlaps between the new environment CIDRs, Company B, and the datacenter.")
+
+    st.markdown("###### Target topology — segmented by environment")
+    _render_network_graph(vpcs=6, dcs=1, hub=hub, dx_speed=dx_speed, sdwan=True, branches=3,
+                          key="integration", env_cidrs=env_cidrs)
+
+    st.markdown("###### Landing Zone — OU structure (after integration)")
+    st.graphviz_chart(_ou_structure_dot(design, include_quarantine=True), use_container_width=True)
+    st.caption("Company B's accounts land in the **Acquired / Quarantine OU** (permissive SCP), are "
+               "baselined, then graduate into the Prod / Stage / Dev OUs.")
 
     _runbook([
         ("Phase 0 — Connect the new account to the datacenter (DX over SD-WAN)", [
@@ -1096,6 +1398,18 @@ def _ma_integration(design, derived):
                         use_container_width=True, key="conn_tf_integration")
 
     st.divider()
+    st.markdown("#### 🌐 Detailed networking setup guide")
+    st.caption("A step-by-step runbook to build the hybrid network for this scenario: order Direct "
+               "Connect, build the hub, transit VIF, SD-WAN overlay (TGW Connect), VPN backup, "
+               "per-environment segmentation with the CIDRs above, the MGN replication path, and "
+               "validation.")
+    st.download_button("⬇️ Download networking-setup.md",
+                       _networking_setup_guide(hub, dx_speed, dx_redundant, env_cidrs, b_vms,
+                                               dc_cidr=dc_cidr, b_cidr=company_b),
+                       file_name="networking-setup.md", mime="text/markdown",
+                       use_container_width=True, key="netguide_integration")
+
+    st.divider()
     st.markdown("#### Plug-and-play: per-wave MGN cutover runbook for Company B's VMs")
     st.caption("An executable checklist (+ CSV wave plan) to migrate the VMs in dependency-safe waves.")
     _runbook_downloads(b_vms, 10, key="integration", target="company-a")
@@ -1106,7 +1420,8 @@ def _ma_integration(design, derived):
                "connectivity (DX + SD-WAN + hub) + integration account IaC + MGN cutover runbook — "
                "with a master README and deploy order.")
     st.download_button("⬇️ Download acquisition-playbook.zip",
-                       _acquisition_package(design, hub, dx_speed, dx_redundant, b_vms),
+                       _acquisition_package(design, hub, dx_speed, dx_redundant, b_vms,
+                                            plan_rows=plan_rows, env_cidrs=env_cidrs),
                        file_name="acquisition-playbook.zip", mime="application/zip",
                        use_container_width=True, type="primary")
 
