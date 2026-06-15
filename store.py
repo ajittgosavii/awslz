@@ -59,6 +59,15 @@ _DDL = [
         text         TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS checklists (
+        username   TEXT NOT NULL,
+        name       TEXT NOT NULL,
+        data_json  TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (username, name)
+    )
+    """,
 ]
 
 
@@ -230,3 +239,30 @@ def load_comments(scenario_key: str) -> list:
         f"SELECT ts, author, text FROM comments WHERE scenario_key = {p} ORDER BY ts ASC",
         (scenario_key,), fetch=True) or []
     return [{"ts": str(ts), "author": author, "text": text} for ts, author, text in rows]
+
+
+# ---------------------------------------------------------------------------
+# Checklists — durable per-user task progress for the project-plan tracker
+# ---------------------------------------------------------------------------
+
+def save_checklist(user: str, name: str, state: dict) -> None:
+    p = _ph()
+    _execute(
+        f"INSERT INTO checklists (username, name, data_json, updated_at) "
+        f"VALUES ({p}, {p}, {p}, {p}) "
+        f"ON CONFLICT (username, name) DO UPDATE SET "
+        f"data_json=EXCLUDED.data_json, updated_at=EXCLUDED.updated_at",
+        (user, name, json.dumps(state), _now()))
+
+
+def load_checklist(user: str, name: str) -> dict:
+    p = _ph()
+    rows = _execute(
+        f"SELECT data_json FROM checklists WHERE username = {p} AND name = {p}",
+        (user, name), fetch=True) or []
+    if rows:
+        try:
+            return json.loads(rows[0][0])
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}

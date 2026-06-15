@@ -118,6 +118,12 @@ def render():
          "Chat with a principal-architect AI (Claude or OpenAI) that already has your design, scores, "
          "and cost as context. One-click prompts: review the design, compare to best practice, build a "
          "Day-1/2 roadmap, or turn WAF findings into a prioritized remediation plan."),
+        ("✅ Checklists",
+         "Trackable **project plans** for landing-zone delivery: **Networking (Data Center ↔ AWS)**, "
+         "**Control Tower / OU / Accounts / Environments / VPC**, and **VM migration between AWS "
+         "accounts (AWS MGN)**. Each is phased with owner, effort, and dependencies; tick tasks off "
+         "(progress saved per user), see a **critical-path Gantt with realistic timelines**, and "
+         "export as CSV (Excel / MS Project) or Markdown."),
         ("🧮 CIDR",
          "An **IP address planner**. *Allocate* carves a supernet (your IPAM pool) into per-VPC and "
          "per-subnet blocks and shows a treemap of exactly **how the address space is utilized** "
