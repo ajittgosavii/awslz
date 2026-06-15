@@ -40,6 +40,13 @@ _STYLE = """
   .flow-egress { stroke:#5B8DEF; animation-duration:1.5s; }
   .flow-sdwan { stroke:#2DD4BF; opacity:.8; animation-duration:1.8s; }
   .flow-vpn { stroke:#B0084D; stroke-dasharray:4 9; animation-duration:2.6s; opacity:.85; }
+  /* DX <-> VPN auto-failover: DX active, then drops while VPN takes over */
+  .fail-dx { stroke:#FF9900; stroke-width:2.6; stroke-dasharray:9 7;
+             animation: dash 1s linear infinite, faildx 9s ease-in-out infinite; }
+  .fail-vpn { stroke:#B0084D; stroke-width:2.6; stroke-dasharray:4 9;
+              animation: dash 2.6s linear infinite, failvpn 9s ease-in-out infinite; }
+  @keyframes faildx  { 0%,58% {opacity:1;}   66%,90% {opacity:.1;}  100% {opacity:1;} }
+  @keyframes failvpn { 0%,58% {opacity:.15;} 66%,90% {opacity:1;}   100% {opacity:.15;} }
   text { paint-order: stroke; }
 </style>
 """
@@ -111,9 +118,10 @@ def _region(x0, w, name, supernet, sdwan=True):
     g.append(_node(nx + 322, ny + 34, nw - 336, 52, "Security acct", NAVY, "#E9EEF7", "LogArchive·Audit"))
     g.append(_node(nx + 322, ny + 100, nw - 336, 46, "Shared Services", NAVY, "#E9EEF7",
                    "AD · ITSM · AWS SSO"))
-    g.append(_text(nx + 12, ny + 188, "+ Route 53 Resolver · VPC interface endpoints (PrivateLink) · "
-                   "all VPC↔VPC and on-prem traffic inspected by AWS Network Firewall",
-                   MUT, 8.5, "500"))
+    g.append(_text(nx + 12, ny + 180, "+ Route 53 Resolver · VPC endpoints (PrivateLink) · "
+                   "GuardDuty · Security Hub · Config (delegated admin → Audit)", MUT, 8.5, "500"))
+    g.append(_text(nx + 12, ny + 191, "All VPC↔VPC and on-prem traffic inspected by AWS Network "
+                   "Firewall · VPCs attach to TGW (any-to-any) — no full-mesh VPC peering", MUT, 8.5, "500"))
 
     tgw_cx = tgw_x + tgw_w / 2
     tgw_cy = tgw_y + tgw_h / 2
@@ -155,7 +163,7 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
     route tables, firewall endpoints per AZ, NAT per AZ, IGW, TGW attachments, and
     Shared Services (AD/ITSM/SSO). Animated ingress / egress / east-west flows, all
     routed through the AWS Network Firewall (appliance-mode inspection)."""
-    W, H = 1500, 1060
+    W, H = 1500, 1130
     ec = _env_cidrs(supernet)
     prod = ec.get("Production", {"vpc": supernet, "subnets": {}})
     s = [f'<rect width="{W}" height="{H}" fill="#080D17"/>']
@@ -173,6 +181,8 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
     s.append(_rect(660, 60, 180, 50, "none", stroke=AMBER, sw=2, rx=10))
     s.append(_node(660, 118, 180, 26, "TGW route table → inspection", NAVY, "#E9EEF7", rx=6))
     s.append(_node(1300, 50, 170, 50, "🌐 Internet", "#22303f", "#E9EEF7", "egress"))
+    s.append(_text(900, 78, "VPCs attach to TGW (any-to-any, transitive) — no full-mesh VPC peering",
+                   MUT, 9, "500"))
     tgw_cx, tgw_bottom = 750, 144
 
     # --- Inspection / Network VPC ---
@@ -226,9 +236,26 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
         x = 318 + i * 192
         s.append(_node(x, sy + 32, 180, 56, lab, NAVY, "#E9EEF7", sub))
 
+    # --- Security account (delegated admin, org-wide) ---
+    qy = 930
+    s.append(_rect(300, qy, 1170, 96, "#0C1422", stroke=GREEN, sw=1.4, rx=12))
+    s.append(_text(312, qy + 20, "Security account · delegated admin (org-wide)", GREEN, 11.5, "700"))
+    for i, (lab, sub) in enumerate([
+            ("Amazon GuardDuty", "threat detection"), ("AWS Security Hub", "posture / CSPM"),
+            ("AWS Config", "compliance rules"), ("CloudTrail", "org trail"),
+            ("Log Archive", "S3 Object Lock"), ("Access Analyzer", "external access")]):
+        x = 318 + i * 192
+        col = GREEN if i < 3 else NAVY
+        s.append(_node(x, qy + 30, 180, 52, lab, col, INKT if i < 3 else "#E9EEF7", sub))
+
     # --- animated traffic flows (all via the firewall) ---
+    # 0) DX primary <-> VPN backup auto-failover
+    sg, _ = _flow(420, 80, 660, 80, "flow-dx fail-dx"); s.append(sg)
+    sg, _ = _flow(420, 144, 660, 102, "flow-vpn fail-vpn"); s.append(sg)
+    s.append(_text(545, 64, "DX ⇄ VPN failover", AMBER, 9, "600", "middle"))
     # 1) ingress: DX -> TGW -> firewall endpoint (AZ-a) -> app subnet (AZ-a)
-    sg, d = _flow(420, 80, 660, 85, "flow-dx"); s.append(sg); flows.append((d, AMBER, "2.2s"))
+    d = f"M 660 80 L 745 80"  # reference DX path for an ingress packet
+    flows.append((d, AMBER, "2.2s"))
     sg, d = _flow(tgw_cx, tgw_bottom, *fw_anchor["a"], "flow-inspect", mid=(tgw_cx, 200, fw_anchor["a"][0], 230)); s.append(sg); flows.append((d, GREEN, "2.0s"))
     sg, d = _flow(*fw_anchor["a"], *app_anchor["a"], "flow-inspect", mid=(fw_anchor["a"][0], 420, app_anchor["a"][0], 470)); s.append(sg); flows.append((d, GREEN, "2.2s"))
     # 2) egress: app (AZ-b) -> TGW -> firewall (AZ-b) -> NAT (AZ-b) -> IGW -> Internet
@@ -292,16 +319,16 @@ def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdw
         s.append(sg)
     sg, _d = _flow(208, 418, 270, 418, "flow-sdwan")  # SD-WAN edge -> DX area
     s.append(sg)
-    # DX -> TGW(region1) and TGW(region2)
-    sg, d1 = _flow(420, 358, r1tx0, r1cy, "flow-dx", mid=(450, 358, 460, r1cy)); s.append(sg); flows.append((d1, AMBER, "2.6s"))
-    sg, d2 = _flow(420, 350, r2tx0, 110, "flow-dx", mid=(720, 60, 940, 60)); s.append(sg); flows.append((d2, AMBER, "3.6s"))
-    # VPN -> TGW(region1) and TGW(region2)  (backup, slower dashed)
-    sg, dv1 = _flow(420, 498, r1tx0, r1cy + 14, "flow-vpn", mid=(450, 520, 460, r1cy + 14)); s.append(sg)
-    sg, dv2 = _flow(420, 506, r2tx0, 150, "flow-vpn", mid=(720, 900, 940, 900)); s.append(sg)
-    # inter-region TGW peering
+    # DX + VPN terminate at the PRIMARY region's TGW; the second region is reached
+    # via inter-region TGW peering (no second DX line).
+    sg, d1 = _flow(420, 358, r1tx0, r1cy, "flow-dx fail-dx", mid=(450, 358, 460, r1cy)); s.append(sg)
+    sg, dv1 = _flow(420, 498, r1tx0, r1cy + 14, "flow-vpn fail-vpn", mid=(450, 520, 460, r1cy + 14)); s.append(sg)
+    s.append(_text(345, 300, "DX primary ⇄ VPN auto-failover", AMBER, 9.5, "600", "middle"))
+    # inter-region TGW peering (carries traffic to region 2)
     sg, dp = _flow(r1tx1, r1cy, r2tx0, r2cy, "flow-peer", mid=(r1tx1 + 70, r1cy - 60, r2tx0 - 70, r2cy - 60))
     s.append(sg); flows.append((dp, TEAL, "2.8s"))
     s.append(_text((r1tx1 + r2tx0) / 2, r1cy - 52, "TGW inter-region peering", TEAL, 10, "600", "middle"))
+    s.append(_text((r1tx1 + r2tx0) / 2, r1cy - 40, "transitive · not VPC peering (O(n²))", MUT, 8.5, "500", "middle"))
 
     packets = "".join(_packet(d, c, dur) for d, c, dur in flows)
 
