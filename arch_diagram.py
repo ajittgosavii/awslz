@@ -41,8 +41,8 @@ _STYLE = """
   .flow-sdwan { stroke:#2DD4BF; opacity:.8; animation-duration:1.8s; }
   .flow-attach { stroke:#FF9900; opacity:.5; animation-duration:2.4s; }
   .flow-log { stroke:#8C9CB8; stroke-dasharray:2 7; animation-duration:3.4s; opacity:.6; }
-  .flow-np { stroke:#5B8DEF; opacity:.5; animation-duration:2.3s; }
-  .flow-prod { stroke:#B0084D; opacity:.55; animation-duration:2.0s; }
+  .flow-np { stroke:#5B8DEF; opacity:.7; stroke-width:2.4; animation-duration:2.3s; }
+  .flow-prod { stroke:#B0084D; opacity:.75; stroke-width:2.4; animation-duration:2.0s; }
   .flow-vpn { stroke:#B0084D; stroke-dasharray:4 9; animation-duration:2.6s; opacity:.85; }
   /* DX <-> VPN auto-failover: DX active, then drops while VPN takes over */
   .fail-dx { stroke:#FF9900; stroke-width:2.6; stroke-dasharray:9 7;
@@ -415,89 +415,99 @@ def accounts_view(regions=("us-east-1", "us-west-2"),
     (public/app/db). Every VPC attaches to the Network-account TGW; the regional
     TGWs are peered and all attachments are centrally inspected.
     """
-    W, H = 1680, 1000
+    W, H = 1680, 720
     re_, rw = regions
     s = [f'<rect width="{W}" height="{H}" fill="#080D17"/>']
-    s.append(_text(W / 2, 26, "AWS Multi-Account Network View", "#E9EEF7", 16, "700", "middle"))
-    s.append(_text(W / 2, 44, "platform accounts (horizontal) over the TGW fabric · application "
-                   f"accounts drilled Account → VPC → subnet · {re_} ⇄ {rw} peered · centrally inspected",
-                   MUT, 9.5, "500", "middle"))
+    s.append(_text(W / 2, 22, "AWS Multi-Account Network View", "#E9EEF7", 16, "700", "middle"))
+    s.append(_text(W / 2, 40, f"on-prem datacenter → DX/VPN → Network-account TGW · platform accounts "
+                   f"(horizontal) · application accounts drilled Account → VPC → subnet · {re_} ⇄ {rw} "
+                   "peered, centrally inspected", MUT, 9.5, "500", "middle"))
 
     env_col = {"Prod": RED, "Non-Prod": BLUE, "Dev": AMBER, "Platform": TEAL}
     env_tag = {"Prod": "PROD", "Non-Prod": "NON-PROD", "Dev": "DEV", "Platform": "PLATFORM"}
+    pw = (W - 48 - 5 * 12) / 6
+    by, bh, bus_y = 150, 104, 280
+
+    # ---------- on-prem datacenter -> DX + VPN into the Network-account TGW ----------
+    dcx, dcy, dch = 24, 54, 82
+    cw2 = pw / 2 - 16
+    s.append(_rect(dcx, dcy, pw, dch, "#0C1422", stroke=GREY, rx=10, dash="5 5"))
+    s.append(_text(dcx + 12, dcy + 18, "On-prem Datacenter", "#E9EEF7", 10, "700"))
+    s.append(_text(dcx + 12, dcy + 32, "10.100.0.0/16 · SD-WAN · branches", MUT, 8, "500"))
+    s.append(_node(dcx + 12, dcy + 44, cw2, 26, "Direct Connect", AMBER, INKT, "DX GW · primary"))
+    s.append(_node(dcx + pw / 2 + 4, dcy + 44, cw2, 26, "Site-to-Site VPN", RED, "#E9EEF7", "backup"))
+    dx_cx, vpn_cx = dcx + 12 + cw2 / 2, dcx + pw / 2 + 4 + cw2 / 2
+    s.append(_flow(dx_cx, dcy + dch, dx_cx, by, "flow-dx")[0])
+    s.append(_flow(vpn_cx, dcy + dch, vpn_cx, by, "flow-vpn")[0])
+    s.append(_text(dcx + pw / 2, by - 4, "DX primary ⇄ VPN backup → TGW", AMBER, 7.5, "700", "middle"))
 
     # ---------- platform band (horizontal accounts) over the TGW fabric ----------
-    by, bh, bus_y = 64, 96, 182
-    pw = (W - 48 - 5 * 12) / 6
-    net_cx = 24 + pw / 2
     for i, (nm, sub) in enumerate(platform):
         x = 24 + i * (pw + 12)
         is_net = (nm == "Network")
         col = AMBER if is_net else NAVY
-        s.append(_rect(x, by, pw, bh, "#0C1422", stroke=col, sw=1.9 if is_net else 1.3, rx=10))
-        s.append(_rect(x, by, pw, 18, col, rx=10))
-        s.append(_text(x + 8, by + 13, nm + " account", "#0B1220", 9.5, "700"))
+        s.append(_rect(x, by, pw, bh, "#0C1422", stroke=col, sw=2.0 if is_net else 1.3, rx=10))
+        s.append(_rect(x, by, pw, 20, col, rx=10))
+        s.append(_text(x + 8, by + 14, nm + " account", "#0B1220", 9.5, "700"))
         if is_net:
-            net_cx = x + pw / 2
             cwid = pw / 2 - 18
-            s.append(_node(x + 12, by + 28, cwid, 40, "TGW", INK, "#E9EEF7", re_))
-            s.append(_rect(x + 12, by + 28, cwid, 40, "none", stroke=AMBER, sw=1.8, rx=8))
-            s.append(_node(x + pw / 2 + 6, by + 28, cwid, 40, "TGW", INK, "#E9EEF7", rw))
-            s.append(_rect(x + pw / 2 + 6, by + 28, cwid, 40, "none", stroke=AMBER, sw=1.8, rx=8))
-            s.append(_flow(x + 12 + cwid, by + 48, x + pw / 2 + 6, by + 48, "flow-peer")[0])
-            s.append(_text(x + pw / 2, by + 86, "TGW inter-region peering", TEAL, 8, "700", "middle"))
+            s.append(_node(x + 12, by + 30, cwid, 42, "TGW", INK, "#E9EEF7", re_))
+            s.append(_rect(x + 12, by + 30, cwid, 42, "none", stroke=AMBER, sw=1.8, rx=8))
+            s.append(_node(x + pw / 2 + 6, by + 30, cwid, 42, "TGW", INK, "#E9EEF7", rw))
+            s.append(_rect(x + pw / 2 + 6, by + 30, cwid, 42, "none", stroke=AMBER, sw=1.8, rx=8))
+            s.append(_flow(x + 12 + cwid, by + 51, x + pw / 2 + 6, by + 51, "flow-peer")[0])
+            s.append(_text(x + pw / 2, by + 92, "TGW inter-region peering", TEAL, 8.5, "700", "middle"))
         else:
-            s.append(_text(x + 8, by + 42, sub, MUT, 8.2, "500"))
-            s.append(_text(x + 8, by + 62, "↳ attaches to the TGW", MUT, 7.5, "600"))
-            s.append(_text(x + 8, by + 80, "(any-to-any, inspected)", MUT, 7, "500"))
-        # drop each platform account to the attachment fabric
+            s.append(_text(x + 10, by + 44, sub, MUT, 8.5, "500"))
+            s.append(_text(x + 10, by + 66, "↳ attaches to the TGW", MUT, 8, "600"))
+            s.append(_text(x + 10, by + 84, "(any-to-any · inspected)", MUT, 7.5, "500"))
         s.append(_flow(x + pw / 2, by + bh, x + pw / 2, bus_y, "flow-attach")[0])
 
     # the Transit Gateway attachment fabric (single bus = the TGW route domain)
     s.append(_flow(36, bus_y, W - 36, bus_y, "flow-attach")[0])
-    s.append(_text(40, bus_y - 7, "🛡 Transit Gateway attachment fabric — every VPC attaches here; "
+    s.append(_text(40, bus_y - 8, "🛡 Transit Gateway attachment fabric — every VPC attaches here; "
                    "inter-VPC + on-prem traffic inspected by AWS Network Firewall (no full-mesh peering)",
                    MUT, 9, "600"))
 
     # ---------- application accounts (vertical), drilled Account -> VPC -> subnet ----------
-    ay, ah = 212, 604
+    ay, ah = 300, 366
     n = max(1, len(apps))
     aw = (W - 48 - (n - 1) * 30) / n
     for k, (nm, env) in enumerate(apps):
         x = 24 + k * (aw + 30)
         col = env_col.get(env, NAVY)
-        s.append(_rect(x, ay, aw, ah, "#0B1422", stroke=col, sw=1.6, rx=12))
+        s.append(_rect(x, ay, aw, ah, "#0B1422", stroke=col, sw=1.7, rx=12))
         s.append(_rect(x, ay, aw, 26, col, rx=12))
-        s.append(_text(x + 12, ay + 17, nm, "#0B1220", 10, "700"))
-        s.append(_text(x + aw - 10, ay + 17, env_tag.get(env, env), "#0B1220", 8, "700", "end"))
-        # two VPCs, one per region, each drilled to public/app/db subnets
+        s.append(_text(x + 12, ay + 18, nm, "#0B1220", 10.5, "700"))
+        s.append(_text(x + aw - 10, ay + 18, env_tag.get(env, env), "#0B1220", 8.5, "700", "end"))
         vw = (aw - 36) / 2
         for r, (rg, base) in enumerate([(re_, "10.120"), (rw, "10.220")]):
             vx = x + 12 + r * (vw + 12)
-            vy, vh = ay + 36, ah - 50
-            s.append(_rect(vx, vy, vw, vh, "#0C1422", stroke=col, sw=1.1, rx=9))
-            s.append(_text(vx + 8, vy + 16, f"VPC · {rg}", col, 8.6, "700"))
-            s.append(_text(vx + 8, vy + 29, f"{base}.{k * 16}.0/20", MUT, 8, "500", mono=True))
-            tiers = [("public", GREEN, "RT → IGW"), ("app", NAVY, "RT → TGW → FW"),
-                     ("db", GREY, "RT local")]
-            seg = (vh - 44) / 3
+            vy, vh = ay + 36, ah - 48
+            s.append(_rect(vx, vy, vw, vh, "#0C1422", stroke=col, sw=1.2, rx=9))
+            s.append(_text(vx + 10, vy + 17, f"VPC · {rg}", col, 9.5, "700"))
+            s.append(_text(vx + 10, vy + 30, f"{base}.{k * 16}.0/20", MUT, 8.5, "500", mono=True))
+            tiers = [("public", GREEN, "RT → IGW (ingress)"), ("app", NAVY, "RT → TGW → firewall"),
+                     ("db", GREY, "RT local only")]
+            seg = (vh - 42) / 3
             for j, (t, tc, rt) in enumerate(tiers):
-                sy = vy + 38 + j * seg
-                s.append(_rect(vx + 8, sy, vw - 16, seg - 8, "#0a1019", stroke=tc, sw=1.1, rx=7))
-                s.append(_text(vx + 14, sy + 16, f"{t} subnet", tc, 8.6, "700"))
-                s.append(_text(vx + 14, sy + 29, f"{base}.{k * 16 + j * 4}.0/22", "#E9EEF7", 7.6, "500", mono=True))
-                s.append(_text(vx + 14, sy + 41, f"×2 AZ · {rt}", MUT, 7, "500"))
-            # attach this VPC up to the TGW fabric (colour by environment)
+                sy = vy + 40 + j * seg
+                s.append(_rect(vx + 8, sy, vw - 16, seg - 8, "#0a1019", stroke=tc, sw=1.2, rx=7))
+                s.append(_text(vx + 14, sy + 17, f"{t} subnet", tc, 9, "700"))
+                s.append(_text(vx + 14, sy + 31, f"{base}.{k * 16 + j * 4}.0/22  ·  ×2 AZ", "#E9EEF7",
+                               8, "500", mono=True))
+                s.append(_text(vx + 14, sy + 45, rt, MUT, 7.5, "500"))
             cls = "flow-prod" if env == "Prod" else "flow-np"
             vcx = vx + vw / 2
             s.append(_flow(vcx, ay, vcx, bus_y, cls)[0])
 
     # legend
     leg = [("Prod VPC → TGW", "flow-prod"), ("Non-Prod VPC → TGW", "flow-np"),
-           ("TGW attachment fabric", "flow-attach"), ("TGW peering", "flow-peer")]
-    ly = H - 22
+           ("TGW fabric", "flow-attach"), ("TGW peering", "flow-peer"),
+           ("Direct Connect", "flow-dx"), ("Site-to-Site VPN", "flow-vpn")]
+    ly = H - 18
     for i, (lab, cls) in enumerate(leg):
-        x = 40 + i * 300
+        x = 40 + i * 268
         s.append(f'<line x1="{x}" y1="{ly}" x2="{x+24}" y2="{ly}" class="flow {cls}"/>')
         s.append(_text(x + 30, ly + 4, lab, MUT, 10, "500"))
 
