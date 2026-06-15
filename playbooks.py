@@ -1384,6 +1384,78 @@ def _ma_integration(design, derived):
     st.download_button("⬇️ This diagram (animated HTML)", _end_html, file_name=_fn,
                        mime="text/html", use_container_width=True, key="endstate_dl")
 
+    st.divider()
+    st.markdown("#### ✅ Well-Architected alignment — how this M&A scenario satisfies every pillar")
+    st.caption("Maps each of the six AWS Well-Architected pillars to the concrete design decisions in "
+               "**this acquisition**. The scored, design-wide assessment + the WAF-aligned capability map "
+               "live in the **Well-Architected** tab.")
+    _dx_txt = "two Direct Connect links (HA)" if dx_redundant else \
+        "a Direct Connect link with a Site-to-Site VPN backup"
+    _waf_map = [
+        ("🛠️ Operational Excellence", [
+            ("Perform operations as code (repeatable)", f"New account vended via **Account Factory / AFT**; "
+             "**connectivity.tf** + the integration IaC bundle codify DX/SD-WAN/hub/VPCs — the whole "
+             "pattern is **replayable for the next acquisition**."),
+            ("Observability & change management", "**Monitoring account** (CloudWatch · Coralogix) + "
+             "centralized logs to **Log Archive**; **ITSM** (ServiceNow) integration for change control."),
+            ("Small, reversible changes", f"Cutover in **{waves} wave(s) of ~10 VMs**, each test-launched "
+             "first; **rollback retained until finalize**."),
+        ]),
+        ("🔒 Security", [
+            ("Strong identity & isolation", "**IAM Identity Center (AWS SSO)** federation; the **Acquired / "
+             "Quarantine OU** (permissive SCP) isolates Company B until baselined, then graduates into the "
+             "**Prod / Staging / Dev+Test** OUs."),
+            ("Detective controls (delegated admin)", "**Security account**: GuardDuty · Security Hub · AWS "
+             "Config · **org CloudTrail** · **Log Archive (S3 Object Lock)** · Access Analyzer."),
+            ("Network & data protection", "**AWS Network Firewall** (appliance-mode) inspects **all** "
+             "VPC↔VPC + on-prem traffic; **encrypted** DX + Site-to-Site VPN; KMS-encrypted volumes."),
+        ]),
+        ("♻️ Reliability", [
+            ("No single point of failure", f"Hybrid link uses **{_dx_txt}** with **DX⇄VPN auto-failover**; "
+             "**multi-AZ (×2)** subnets; **HA SD-WAN** appliance pair."),
+            ("Multi-region foundation", f"**{hub}** any-to-any with **inter-region TGW peering** "
+             "(us-east-1 + us-west-2) — transitive, no full-mesh."),
+            ("Safe migration", f"**MGN** block replication + **test-launch in an isolated subnet** "
+             "(validate without impacting source); **CIDR-overlap checks** before peering."),
+        ]),
+        ("⚡ Performance Efficiency", [
+            ("Scalable network topology", "**TGW transitive** routing avoids O(n²) VPC peering; **SD-WAN "
+             "overlay** (TGW Connect/GRE) optimizes the on-prem path; **PrivateLink** endpoints."),
+            ("Right-sized compute", "MGN **launch templates** map each source VM to a right-sized instance "
+             "type; **gp3** staging volumes."),
+            ("Data-driven placement", "Region/AZ placement per latency + data-residency; centralized "
+             "egress/NAT keeps the data path efficient."),
+        ]),
+        ("💰 Cost Optimization", [
+            ("Cost-aware account structure", "**Account-per-environment/workload** → granular **cost "
+             "allocation** + **showback / chargeback** (Consumption Management); shared centralized **NAT**."),
+            ("Eliminate waste", f"**Decommission Company B's {int(b_vms)} source VMs / datacenter** after "
+             "cutover (stop paying twice); right-sizing; MGN free for the first 90 days."),
+            ("Plan & track spend", "Budgeting & planning, cost-allocation tags, **Resource Optimization** "
+             "(Financial Governance)."),
+        ]),
+        ("🌱 Sustainability", [
+            ("Reduce provisioned footprint", f"Retire Company B's **on-prem datacenter** ({int(b_vms)} VMs) "
+             "onto shared, multi-tenant **platform accounts**; managed services (Managed AD) cut idle capacity."),
+            ("Match supply to demand", "Auto-scaling + right-sizing align capacity to load; consolidate "
+             "onto fewer, better-utilized regions."),
+        ]),
+    ]
+    _wcols = st.columns(2)
+    for _i, (_p, _rows) in enumerate(_waf_map):
+        with _wcols[_i % 2]:
+            with st.expander(f"{_p}  —  ✅ satisfied", expanded=(_i < 2)):
+                for _crit, _how in _rows:
+                    st.markdown(f"- ✅ **{_crit}** — {_how}")
+    st.success("All six Well-Architected pillars are addressed by concrete decisions in this scenario "
+               "(see each pillar above).")
+    _waf_md = "# M&A Landing Zone — AWS Well-Architected alignment\n\n"
+    for _p, _rows in _waf_map:
+        _waf_md += f"## {_p}\n\n" + "".join(f"- **{_c}** — {_h}\n" for _c, _h in _rows) + "\n"
+    st.download_button("⬇️ WAF alignment for this scenario (Markdown)", _waf_md,
+                       file_name="ma-waf-alignment.md", mime="text/markdown",
+                       use_container_width=True, key="ma_waf_md_dl")
+
     _runbook([
         ("Phase 0 — Connect the new account to the datacenter (DX over SD-WAN)", [
             f"In Company A's **Network account**, use the **{hub}** as the any-to-any hub.",
