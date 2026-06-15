@@ -805,79 +805,106 @@ def _hybrid_network(design, derived):
                        use_container_width=True, key="conn_tf_net")
 
 
-def _render_network_graph(vpcs, dcs, hub, dx_speed, sdwan, branches):
-    INK, AMBER, TEAL, NAVY, GREY = "#232F3E", "#FF9900", "#2DD4BF", "#1A476F", "#6E7A8C"
-    details = {}
-    if _HAS_AGRAPH:
-        nodes, edges = [], []
+def _render_network_graph(vpcs, dcs, hub, dx_speed, sdwan, branches, key="net"):
+    INK, AMBER, TEAL, NAVY, GREY, SLATE = "#232F3E", "#FF9900", "#2DD4BF", "#1A476F", "#6E7A8C", "#3A4555"
+    n_vpc_shown = min(vpcs, 12)
+    n_br_shown = min(branches, 10) if sdwan else 0
 
-        def n(nid, label, color, size=20, shape="box"):
-            nodes.append(Node(id=nid, label=label, color=color, shape=shape,
-                              font=_net_font(color), margin=8))
+    interactive = (st.toggle("🖐️ Interactive (drag-to-rearrange) view", value=False, key=f"net_int_{key}")
+                   if _HAS_AGRAPH else False)
 
-        def e(a, b, label=""):
-            edges.append(Edge(source=a, target=b, label=label, color="#5A6B86"))
-
-        n("hub", hub + "\n(Network account)", INK, size=30, shape="hexagon")
-        details["hub"] = f"### {hub}\nAny-to-any hub in the Network account; spokes and on-prem connect here."
-        n("dxgw", "Direct Connect\nGateway", NAVY, shape="diamond")
-        e("dxgw", "hub", "transit VIF")
-        details["dxgw"] = "### Direct Connect Gateway\nAssociates the DX transit VIF with the hub."
+    # ---- Aligned architecture diagram (Graphviz dot, clustered) — default ----
+    if not interactive:
+        dot = ['digraph net {',
+               'rankdir=LR; bgcolor="transparent"; pad="0.35"; nodesep="0.32"; ranksep="1.1"; '
+               'splines="spline";',
+               'node [fontname="Helvetica", fontcolor="white", style="filled,rounded", '
+               'shape="box", color="#3A4555", penwidth="1.2", margin="0.18,0.09"];',
+               'edge [color="#5A6B86", fontcolor="#9FB0C8", fontname="Helvetica", fontsize="10", '
+               'arrowsize="0.7"];']
+        dot.append('subgraph cluster_onprem { label="On-premises"; fontcolor="#8C9CB8"; '
+                   'color="#3A4555"; style="dashed,rounded";')
         for i in range(dcs):
-            nid = f"dc{i}"
-            n(nid, f"Datacenter {i + 1}", GREY)
-            e(nid, "dxgw", f"DX {dx_speed}")
-            details[nid] = f"### On-prem datacenter {i + 1}\nConnected over Direct Connect ({dx_speed})."
-        for j in range(min(vpcs, 12)):
-            nid = f"vpc{j}"
-            n(nid, f"VPC {j + 1}", AMBER)
-            e("hub", nid, "attachment")
-            details[nid] = "### VPC spoke\nWorkload account VPC attached to the hub."
-        if vpcs > 12:
-            n("vpcmore", f"+{vpcs - 12} VPCs", GREY)
-            e("hub", "vpcmore")
+            dot.append(f'dc{i} [label="Datacenter {i + 1}", fillcolor="{GREY}"];')
+        for k in range(n_br_shown):
+            dot.append(f'br{k} [label="Branch {k + 1}", fillcolor="{SLATE}"];')
+        if sdwan and branches > n_br_shown:
+            dot.append(f'brmore [label="+{branches - n_br_shown} sites", fillcolor="{GREY}"];')
+        dot.append('}')
+        dot.append('subgraph cluster_net { label="Network account"; fontcolor="#8C9CB8"; '
+                   'color="#1A476F"; style="rounded";')
+        dot.append(f'dxgw [label="Direct Connect\\nGateway", fillcolor="{NAVY}", shape="box"];')
+        dot.append(f'hub [label="{hub}", fillcolor="{INK}", penwidth="2", color="#FF9900"];')
         if sdwan:
-            n("sdwan", "SD-WAN\nappliances (HA)", TEAL, shape="diamond")
-            e("sdwan", "hub", "overlay")
-            details["sdwan"] = "### SD-WAN appliances\nHA pair in the Network/Transit VPC; terminates branch overlays."
-            for k in range(min(branches, 10)):
-                nid = f"br{k}"
-                n(nid, f"Branch {k + 1}", "#3A4555")
-                e(nid, "sdwan", "SD-WAN")
-                details[nid] = "### Branch / remote site\nConnected via the SD-WAN overlay."
-            if branches > 10:
-                n("brmore", f"+{branches - 10} sites", GREY)
-                e("brmore", "sdwan")
-        cfg = Config(width="100%", height=460, directed=True, physics=True,
-                     nodeHighlightBehavior=True, highlightColor=AMBER,
-                     node={"labelProperty": "label"}, link={"renderLabel": True})
-        clicked = agraph(nodes=nodes, edges=edges, config=cfg)
-        if clicked and clicked in details:
-            st.info(details[clicked])
-        else:
-            st.caption("💡 Drag nodes to rearrange · click a node for details.")
+            dot.append(f'sdwan [label="SD-WAN\\nappliances (HA)", fillcolor="{TEAL}", fontcolor="#0B1220"];')
+        dot.append('}')
+        dot.append('subgraph cluster_wl { label="Workload accounts"; fontcolor="#8C9CB8"; '
+                   'color="#C47400"; style="rounded";')
+        for j in range(n_vpc_shown):
+            dot.append(f'vpc{j} [label="VPC {j + 1}", fillcolor="{AMBER}", fontcolor="#232F3E"];')
+        if vpcs > n_vpc_shown:
+            dot.append(f'vpcmore [label="+{vpcs - n_vpc_shown} VPCs", fillcolor="{GREY}"];')
+        dot.append('}')
+        for i in range(dcs):
+            dot.append(f'dc{i} -> dxgw [label="{dx_speed if i == 0 else ""}"];')
+        dot.append('dxgw -> hub [label="transit VIF"];')
+        if sdwan:
+            for k in range(n_br_shown):
+                dot.append(f'br{k} -> sdwan [label="{"SD-WAN" if k == 0 else ""}"];')
+            if branches > n_br_shown:
+                dot.append('brmore -> sdwan;')
+            dot.append('sdwan -> hub [label="overlay"];')
+        for j in range(n_vpc_shown):
+            dot.append(f'hub -> vpc{j} [label="{"attachment" if j == 0 else ""}"];')
+        if vpcs > n_vpc_shown:
+            dot.append('hub -> vpcmore;')
+        dot.append('}')
+        st.graphviz_chart("\n".join(dot), use_container_width=True)
+        st.caption("On-premises → Direct Connect / SD-WAN → Network-account hub → workload VPCs."
+                   + ("  Toggle the interactive view above to drag nodes." if _HAS_AGRAPH else ""))
+        return
+
+    # ---- Interactive draggable view (de-cluttered labels) ----
+    nodes, edges, details = [], [], {}
+
+    def n(nid, label, color, shape="box"):
+        nodes.append(Node(id=nid, label=label, color=color, shape=shape, font=_net_font(color), margin=8))
+
+    def e(a, b, label=""):
+        edges.append(Edge(source=a, target=b, label=label, color="#5A6B86"))
+
+    n("hub", hub, INK, shape="hexagon")
+    details["hub"] = f"### {hub}\nAny-to-any hub in the Network account; spokes and on-prem connect here."
+    n("dxgw", "Direct Connect Gateway", NAVY, shape="diamond")
+    e("dxgw", "hub", "transit VIF")
+    details["dxgw"] = "### Direct Connect Gateway\nAssociates the DX transit VIF with the hub."
+    for i in range(dcs):
+        n(f"dc{i}", f"Datacenter {i + 1}", GREY)
+        e(f"dc{i}", "dxgw", dx_speed if i == 0 else "")
+        details[f"dc{i}"] = f"### On-prem datacenter {i + 1}\nConnected over Direct Connect ({dx_speed})."
+    for j in range(n_vpc_shown):
+        n(f"vpc{j}", f"VPC {j + 1}", AMBER)
+        e("hub", f"vpc{j}")
+        details[f"vpc{j}"] = "### VPC spoke\nWorkload account VPC attached to the hub."
+    if vpcs > n_vpc_shown:
+        n("vpcmore", f"+{vpcs - n_vpc_shown} VPCs", GREY)
+        e("hub", "vpcmore")
+    if sdwan:
+        n("sdwan", "SD-WAN appliances (HA)", TEAL, shape="diamond")
+        e("sdwan", "hub", "overlay")
+        details["sdwan"] = "### SD-WAN appliances\nHA pair in the transit VPC; terminates branch overlays."
+        for k in range(n_br_shown):
+            n(f"br{k}", f"Branch {k + 1}", SLATE)
+            e(f"br{k}", "sdwan", "SD-WAN" if k == 0 else "")
+            details[f"br{k}"] = "### Branch / remote site\nConnected via the SD-WAN overlay."
+    cfg = Config(width="100%", height=480, directed=True, physics=True,
+                 nodeHighlightBehavior=True, highlightColor=AMBER,
+                 node={"labelProperty": "label"}, link={"renderLabel": True})
+    clicked = agraph(nodes=nodes, edges=edges, config=cfg)
+    if clicked and clicked in details:
+        st.info(details[clicked])
     else:
-        import graphviz
-        g = graphviz.Digraph()
-        g.attr(rankdir="LR", bgcolor="transparent")
-        g.attr("node", style="filled,rounded", shape="box", fontcolor="white", color="#1A476F")
-        g.node("hub", f"{hub}\n(Network acct)", fillcolor="#232F3E")
-        g.node("dxgw", "DX Gateway", fillcolor="#1A476F")
-        g.edge("dxgw", "hub")
-        for i in range(dcs):
-            g.node(f"dc{i}", f"Datacenter {i+1}", fillcolor="#6E7A8C")
-            g.edge(f"dc{i}", "dxgw", label=dx_speed)
-        for j in range(min(vpcs, 12)):
-            g.node(f"vpc{j}", f"VPC {j+1}", fillcolor="#FF9900", fontcolor="#232F3E")
-            g.edge("hub", f"vpc{j}")
-        if sdwan:
-            g.node("sdwan", "SD-WAN (HA)", fillcolor="#2DD4BF", fontcolor="#232F3E")
-            g.edge("sdwan", "hub")
-            for k in range(min(branches, 10)):
-                g.node(f"br{k}", f"Branch {k+1}", fillcolor="#3A4555")
-                g.edge(f"br{k}", "sdwan")
-        st.graphviz_chart(g, use_container_width=True)
-        st.caption("Install streamlit-agraph for a draggable, clickable topology.")
+        st.caption("💡 Drag nodes to rearrange · click a node for details.")
 
 
 # ===========================================================================
@@ -1016,7 +1043,8 @@ def _ma_integration(design, derived):
     n2.metric("One-time migration cost", f"${migration_once:,.0f}")
 
     st.markdown("###### Target topology  ·  _drag to rearrange, click for detail_")
-    _render_network_graph(vpcs=5, dcs=1, hub=hub, dx_speed=dx_speed, sdwan=True, branches=3)
+    _render_network_graph(vpcs=5, dcs=1, hub=hub, dx_speed=dx_speed, sdwan=True, branches=3,
+                           key="integration")
 
     _runbook([
         ("Phase 0 — Connect the new account to the datacenter (DX over SD-WAN)", [
