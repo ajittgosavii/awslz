@@ -205,8 +205,9 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
     s.append(_node(660, 60, 180, 50, "Transit Gateway", INK, "#E9EEF7", "appliance-mode"))
     s.append(_rect(660, 60, 180, 50, "none", stroke=AMBER, sw=2, rx=10))
     s.append(_node(660, 118, 180, 26, "TGW route table → inspection", NAVY, "#E9EEF7", rx=6))
+    s.append(_node(870, 60, 200, 44, "SD-WAN (HA)", TEAL, INKT, "TGW Connect / GRE → on-prem"))
     s.append(_node(1300, 50, 170, 50, "🌐 Internet", "#22303f", "#E9EEF7", "egress"))
-    s.append(_text(900, 78, "VPCs attach to TGW (any-to-any, transitive) — no full-mesh VPC peering",
+    s.append(_text(900, 128, "VPCs attach to TGW (any-to-any, transitive) — no full-mesh VPC peering",
                    MUT, 9, "500"))
     tgw_cx, tgw_bottom = 750, 144
 
@@ -216,7 +217,6 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
     s.append(_text(312, iy + 20, "Inspection VPC · Network account  (AWS Network Firewall — stateful)",
                    GREEN, 11.5, "700"))
     s.append(_node(1230, iy + 12, 160, 34, "Internet Gateway", BLUE, "#E9EEF7", rx=8))
-    s.append(_node(1006, iy + 12, 200, 34, "SD-WAN (HA)", TEAL, INKT, "TGW Connect / GRE → on-prem"))
     fw_anchor, nat_anchor = {}, {}
     for i, suffix in enumerate("ab"):
         ax = 330 + i * 460
@@ -465,7 +465,8 @@ def accounts_view(regions=("us-east-1", "us-west-2"),
             s.append(_node(x + pw / 2 + 6, by + 30, cwid, 42, "TGW", INK, "#E9EEF7", rw))
             s.append(_rect(x + pw / 2 + 6, by + 30, cwid, 42, "none", stroke=AMBER, sw=1.8, rx=8))
             s.append(_flow(x + 12 + cwid, by + 51, x + pw / 2 + 6, by + 51, "flow-peer")[0])
-            s.append(_text(x + pw / 2, by + 85, "TGW inter-region peering", TEAL, 8.5, "700", "middle"))
+            s.append(_text(x + pw / 2, by + 85, "one Network account · a TGW per region · peered", TEAL,
+                           8, "700", "middle"))
             s.append(_text(x + pw / 2, by + 97, "+ SD-WAN (HA) · Network Firewall · NAT egress",
                            MUT, 7.5, "600", "middle"))
         else:
@@ -476,9 +477,9 @@ def accounts_view(regions=("us-east-1", "us-west-2"),
 
     # the Transit Gateway attachment fabric (single bus = the TGW route domain)
     s.append(_flow(36, bus_y, W - 36, bus_y, "flow-attach")[0])
-    s.append(_text(40, bus_y - 8, "🛡 Transit Gateway attachment fabric — every VPC attaches here; "
-                   "inter-VPC + on-prem traffic inspected by AWS Network Firewall (no full-mesh peering)",
-                   MUT, 9, "600"))
+    s.append(_text(40, bus_y - 8, "🛡 Transit Gateway attachment fabric — every VPC attaches in BOTH "
+                   f"regions ({re_} + {rw}, peered); inter-VPC + on-prem traffic inspected by AWS "
+                   "Network Firewall (no full-mesh peering)", MUT, 9, "600"))
 
     # ---------- application accounts (vertical), drilled Account -> env VPC -> subnet ----------
     # Each app has THREE environments (Prod / Staging / Dev+Test), each its own VPC
@@ -495,20 +496,22 @@ def accounts_view(regions=("us-east-1", "us-west-2"),
         s.append(_text(x + aw - 10, ay + 18, "Prod · Staging · Dev+Test", "#E9EEF7", 8, "700", "end"))
         vw = (aw - 48) / 3
         for r, (en, ecol, cls, base) in enumerate(APP_ENVS):
+            base_w = base.replace("10.1", "10.2")  # us-west-2 mirror CIDR
             vx = x + 12 + r * (vw + 12)
             vy, vh = ay + 36, ah - 48
             s.append(_rect(vx, vy, vw, vh, "#0C1422", stroke=ecol, sw=1.3, rx=9))
             s.append(_rect(vx, vy, vw, 18, ecol, rx=9))
             s.append(_text(vx + 7, vy + 13, f"{app_id} · {en}", "#0B1220", 8.4, "700"))
-            s.append(_text(vx + 7, vy + 30, f"{base}.{k * 16}.0/20", MUT, 7.6, "500", mono=True))
+            s.append(_text(vx + 7, vy + 29, f"{re_}  {base}.{k * 16}.0/20", MUT, 7, "500", mono=True))
+            s.append(_text(vx + 7, vy + 39, f"{rw}  {base_w}.{k * 16}.0/20", MUT, 7, "500", mono=True))
             tiers = [("public", GREEN, "→ IGW"), ("app", NAVY, "→ TGW → FW"), ("db", GREY, "local")]
-            seg = (vh - 40) / 3
+            seg = (vh - 50) / 3
             for j, (t, tc, rt) in enumerate(tiers):
-                sy = vy + 38 + j * seg
+                sy = vy + 48 + j * seg
                 s.append(_rect(vx + 7, sy, vw - 14, seg - 7, "#0a1019", stroke=tc, sw=1.1, rx=6))
-                s.append(_text(vx + 12, sy + 15, f"{t} subnet", tc, 8.2, "700"))
-                s.append(_text(vx + 12, sy + 28, f"{base}.{k * 16 + j * 4}.0/22", "#E9EEF7", 7.4, "500", mono=True))
-                s.append(_text(vx + 12, sy + 39, f"×2 AZ · RT {rt}", MUT, 6.8, "500"))
+                s.append(_text(vx + 12, sy + 14, f"{t} subnet", tc, 8, "700"))
+                s.append(_text(vx + 12, sy + 26, f"{base}.{k * 16 + j * 4}.0/22", "#E9EEF7", 7.2, "500", mono=True))
+                s.append(_text(vx + 12, sy + 37, f"×2 AZ · 2 regions · {rt}", MUT, 6.6, "500"))
             vcx = vx + vw / 2
             s.append(_flow(vcx, ay, vcx, bus_y, cls)[0])
 
