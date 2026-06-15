@@ -22,12 +22,20 @@ import math
 import plotly.graph_objects as go
 import streamlit as st
 
+import iac
+import pricing
 import waf
 from lz_core import (
     COMPLIANCE_FRAMEWORKS, REGIONS,
     estimate_monthly_cost, recommend_guardrails, score_design, total_accounts,
     workload_account_count, core_account_count,
 )
+
+try:
+    from streamlit_agraph import agraph, Node, Edge, Config
+    _HAS_AGRAPH = True
+except Exception:  # fall back to a static Graphviz diagram
+    _HAS_AGRAPH = False
 
 # ---------------------------------------------------------------------------
 # Assumptions (transparent, like the cost model)
@@ -50,7 +58,21 @@ REFS = {
             "https://docs.aws.amazon.com/controltower/latest/userguide/aft-overview.html"),
     "enroll": ("Enroll existing accounts in AWS Control Tower",
                "https://docs.aws.amazon.com/controltower/latest/userguide/enroll-account.html"),
+    "mgn": ("AWS Application Migration Service (MGN) user guide",
+            "https://docs.aws.amazon.com/mgn/latest/ug/what-is-application-migration-service.html"),
+    "mgn_account": ("MGN — migrate between AWS accounts / regions",
+                    "https://docs.aws.amazon.com/mgn/latest/ug/migrating-to-different-account.html"),
+    "dx": ("AWS Direct Connect resiliency & hybrid connectivity",
+           "https://docs.aws.amazon.com/directconnect/latest/UserGuide/Welcome.html"),
+    "cloudwan": ("AWS Cloud WAN — global network with SD-WAN integration",
+                 "https://docs.aws.amazon.com/network-manager/latest/cloudwan/what-is-cloudwan.html"),
 }
+
+# Contrast-aware label font for the draggable topology nodes (dark canvas).
+def _net_font(fill: str) -> dict:
+    r, g, b = int(fill[1:3], 16), int(fill[3:5], 16), int(fill[5:7], 16)
+    lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    return {"color": "#0B1220" if lum > 150 else "#F4F7FB", "size": 13, "face": "Helvetica"}
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +193,19 @@ def _ma_replicate(design, derived):
         "Service quotas (accounts per org default soft-limit) — request increases before bulk vending.",
     ])
     _refs(["ma_waf", "aft", "migrate_accounts"])
+
+    st.divider()
+    st.markdown("#### Generate the replication IaC")
+    st.caption("Produces a reviewable Terraform scaffold: a shared blueprint **module**, one "
+               "**root per target org** (separate state + provider), and an **AFT** account-request "
+               "file for scaled workload vending.")
+    default_names = ", ".join(f"org-{i + 1}" for i in range(k))
+    names_raw = st.text_input("Target org names (comma-separated)", value=default_names)
+    names = [n.strip() for n in names_raw.split(",") if n.strip()] or [f"org-{i + 1}" for i in range(k)]
+    bundle = iac.replication_bundle(design, names)
+    st.download_button("⬇️ Download replication IaC (Terraform + AFT, .zip)", bundle,
+                       file_name="lz-replication-iac.zip", mime="application/zip",
+                       use_container_width=True)
 
 
 def _scaled(design, factor):
@@ -472,12 +507,356 @@ def _scale_out(design, derived):
     _refs(["aft", "enroll"])
 
 
+# ===========================================================================
+# 7. Hybrid network — SD-WAN + Direct Connect across accounts (draggable)
+# ===========================================================================
+
+def _hybrid_network(design, derived):
+    st.markdown("Model **hybrid connectivity** between on-premises datacenters and your AWS accounts: "
+                "**Direct Connect** into a **Transit Gateway / Cloud WAN** hub that any-to-any connects "
+                "the VPC spokes, with an optional **SD-WAN** overlay for branch sites. The topology "
+                "below is **interactive — drag nodes to rearrange, click a node for details**.")
+
+    c1, c2, c3 = st.columns(3)
+    vpcs = c1.slider("AWS accounts / VPC spokes", 1, 40, max(2, workload_account_count(design)))
+    dcs = c2.slider("On-prem datacenters", 1, 6, 2)
+    hub = c3.selectbox("AWS hub", ["Transit Gateway", "AWS Cloud WAN"])
+    c4, c5, c6 = st.columns(3)
+    dx_speed = c4.selectbox("Direct Connect speed", list(pricing.DX_SPEEDS.keys()), index=1)
+    dx_redundancy = c5.selectbox("DX resiliency",
+                                 ["Single connection", "Redundant (2 ports/locations)",
+                                  "DX + SD-WAN/VPN backup"])
+    egress_tb = c6.slider("DX egress (TB/month)", 1, 200, 20)
+    sdwan = st.toggle("SD-WAN overlay for branch sites", value=True)
+    branches = st.slider("Branch / remote sites", 1, 50, 8) if sdwan else 0
+
+    # --- cost simulation ---
+    speed_key = pricing.DX_SPEEDS[dx_speed]
+    dx_ports = dcs * (2 if dx_redundancy.startswith("Redundant") else 1)
+    dx_port_cost = dx_ports * pricing.lp(speed_key) * pricing.HOURS_PER_MONTH
+    dx_data_cost = egress_tb * 1000 * pricing.lp("dx_data_transfer_out_gb")
+    if hub == "Transit Gateway":
+        hub_cost = pricing.lp("tgw_attachment_hour") * pricing.HOURS_PER_MONTH * vpcs
+    else:
+        hub_cost = (pricing.lp("cloudwan_core_edge_hour") * pricing.HOURS_PER_MONTH
+                    + pricing.lp("cloudwan_attachment_hour") * pricing.HOURS_PER_MONTH * vpcs)
+    sdwan_cost = (2 * pricing.lp("sdwan_appliance_hour") * pricing.HOURS_PER_MONTH) if sdwan else 0
+    total = dx_port_cost + dx_data_cost + hub_cost + sdwan_cost
+    speed_gbps = {"1 Gbps": 1, "10 Gbps": 10, "100 Gbps": 100}[dx_speed]
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("DX connections", dx_ports, help=f"{dcs} DC × {'2 (redundant)' if dx_ports > dcs else '1'}")
+    m2.metric("Aggregate DX bandwidth", f"{dx_ports * speed_gbps} Gbps")
+    m3.metric("Est. network cost", f"${total:,.0f}/mo")
+    resilient = not dx_redundancy.startswith("Single")
+    m4.metric("Resiliency", "✅ HA" if resilient else "⚠️ Single")
+    if not resilient:
+        st.warning("A single Direct Connect has no redundancy — AWS recommends ≥2 connections at "
+                   "separate locations, or a Site-to-Site VPN / SD-WAN backup path.", icon="⚠️")
+
+    # --- draggable topology ---
+    st.markdown("##### Topology")
+    _render_network_graph(vpcs, dcs, hub, dx_speed, sdwan, branches)
+
+    with st.expander("Cost basis"):
+        st.markdown(
+            f"- **DX ports:** {dx_ports} × ${pricing.lp(speed_key)}/hr × {pricing.HOURS_PER_MONTH} = "
+            f"${dx_port_cost:,.0f}/mo  \n"
+            f"- **DX data out:** {egress_tb} TB × ${pricing.lp('dx_data_transfer_out_gb')}/GB = "
+            f"${dx_data_cost:,.0f}/mo  \n"
+            f"- **{hub} hub:** ${hub_cost:,.0f}/mo  \n"
+            + (f"- **SD-WAN HA pair:** ${sdwan_cost:,.0f}/mo (excl. license)  \n" if sdwan else ""))
+
+    _runbook([
+        ("Foundation", [
+            "Centralize connectivity in the **Network account**: stand up the "
+            f"**{hub}** as the any-to-any hub.",
+            "Order **Direct Connect** (dedicated or hosted) at "
+            f"{dcs} location(s); for production use **≥2 connections** at separate DX locations.",
+            "Create a **Direct Connect Gateway** and associate it with the hub (transit VIF)."]),
+        ("Connect spokes & on-prem", [
+            f"Attach the **{vpcs} VPC spokes** to the hub (TGW attachments or Cloud WAN segments) and "
+            "propagate routes.",
+            "Advertise on-prem CIDRs over the transit VIF; segment prod/non-prod with route tables or "
+            "Cloud WAN segments."]
+            + (["Deploy an **SD-WAN** appliance pair (HA) in the Network/Transit VPC; connect "
+                f"the **{branches} branch sites** via the SD-WAN overlay to the hub."] if sdwan else [])),
+        ("Resilience & ops", [
+            "Add a **Site-to-Site VPN** (or SD-WAN) as an encrypted backup path to Direct Connect.",
+            "Enable BGP, set up Reachability Analyzer / Network Manager monitoring, and centralize "
+            "egress + inspection."]),
+    ])
+    _risks([
+        "A single Direct Connect is a single point of failure — use redundant connections or a VPN/SD-WAN backup.",
+        "Overlapping CIDRs between datacenters and VPCs break routing — plan addressing and use NAT/PrivateLink where needed.",
+        "Direct Connect data-transfer-out is cheaper than internet but still material at scale (modeled above).",
+        "SD-WAN appliances need an HA pair and a third-party license; size for throughput.",
+        "Cloud WAN suits global, multi-region, segment-driven networks; a single-region estate is usually simpler on TGW.",
+    ])
+    _refs(["dx", "cloudwan", "ma_network"])
+
+
+def _render_network_graph(vpcs, dcs, hub, dx_speed, sdwan, branches):
+    INK, AMBER, TEAL, NAVY, GREY = "#232F3E", "#FF9900", "#2DD4BF", "#1A476F", "#6E7A8C"
+    details = {}
+    if _HAS_AGRAPH:
+        nodes, edges = [], []
+
+        def n(nid, label, color, size=20, shape="box"):
+            nodes.append(Node(id=nid, label=label, color=color, shape=shape,
+                              font=_net_font(color), margin=8))
+
+        def e(a, b, label=""):
+            edges.append(Edge(source=a, target=b, label=label, color="#5A6B86"))
+
+        n("hub", hub + "\n(Network account)", INK, size=30, shape="hexagon")
+        details["hub"] = f"### {hub}\nAny-to-any hub in the Network account; spokes and on-prem connect here."
+        n("dxgw", "Direct Connect\nGateway", NAVY, shape="diamond")
+        e("dxgw", "hub", "transit VIF")
+        details["dxgw"] = "### Direct Connect Gateway\nAssociates the DX transit VIF with the hub."
+        for i in range(dcs):
+            nid = f"dc{i}"
+            n(nid, f"Datacenter {i + 1}", GREY)
+            e(nid, "dxgw", f"DX {dx_speed}")
+            details[nid] = f"### On-prem datacenter {i + 1}\nConnected over Direct Connect ({dx_speed})."
+        for j in range(min(vpcs, 12)):
+            nid = f"vpc{j}"
+            n(nid, f"VPC {j + 1}", AMBER)
+            e("hub", nid, "attachment")
+            details[nid] = "### VPC spoke\nWorkload account VPC attached to the hub."
+        if vpcs > 12:
+            n("vpcmore", f"+{vpcs - 12} VPCs", GREY)
+            e("hub", "vpcmore")
+        if sdwan:
+            n("sdwan", "SD-WAN\nappliances (HA)", TEAL, shape="diamond")
+            e("sdwan", "hub", "overlay")
+            details["sdwan"] = "### SD-WAN appliances\nHA pair in the Network/Transit VPC; terminates branch overlays."
+            for k in range(min(branches, 10)):
+                nid = f"br{k}"
+                n(nid, f"Branch {k + 1}", "#3A4555")
+                e(nid, "sdwan", "SD-WAN")
+                details[nid] = "### Branch / remote site\nConnected via the SD-WAN overlay."
+            if branches > 10:
+                n("brmore", f"+{branches - 10} sites", GREY)
+                e("brmore", "sdwan")
+        cfg = Config(width="100%", height=460, directed=True, physics=True,
+                     nodeHighlightBehavior=True, highlightColor=AMBER,
+                     node={"labelProperty": "label"}, link={"renderLabel": True})
+        clicked = agraph(nodes=nodes, edges=edges, config=cfg)
+        if clicked and clicked in details:
+            st.info(details[clicked])
+        else:
+            st.caption("💡 Drag nodes to rearrange · click a node for details.")
+    else:
+        import graphviz
+        g = graphviz.Digraph()
+        g.attr(rankdir="LR", bgcolor="transparent")
+        g.attr("node", style="filled,rounded", shape="box", fontcolor="white", color="#1A476F")
+        g.node("hub", f"{hub}\n(Network acct)", fillcolor="#232F3E")
+        g.node("dxgw", "DX Gateway", fillcolor="#1A476F")
+        g.edge("dxgw", "hub")
+        for i in range(dcs):
+            g.node(f"dc{i}", f"Datacenter {i+1}", fillcolor="#6E7A8C")
+            g.edge(f"dc{i}", "dxgw", label=dx_speed)
+        for j in range(min(vpcs, 12)):
+            g.node(f"vpc{j}", f"VPC {j+1}", fillcolor="#FF9900", fontcolor="#232F3E")
+            g.edge("hub", f"vpc{j}")
+        if sdwan:
+            g.node("sdwan", "SD-WAN (HA)", fillcolor="#2DD4BF", fontcolor="#232F3E")
+            g.edge("sdwan", "hub")
+            for k in range(min(branches, 10)):
+                g.node(f"br{k}", f"Branch {k+1}", fillcolor="#3A4555")
+                g.edge(f"br{k}", "sdwan")
+        st.graphviz_chart(g, use_container_width=True)
+        st.caption("Install streamlit-agraph for a draggable, clickable topology.")
+
+
+# ===========================================================================
+# 8. AWS MGN — migrate EC2 instances from an acquired account
+# ===========================================================================
+
+def _mgn_migration(design, derived):
+    st.markdown("Migrate EC2 instances from an **acquired AWS account** into your organization using "
+                "**AWS Application Migration Service (MGN)** — continuous block-level replication into "
+                "a staging area, then test and **cutover in waves**.")
+
+    c1, c2, c3 = st.columns(3)
+    instances = c1.number_input("EC2 instances to migrate", 1, 5000, 68)
+    avg_gb = c2.slider("Avg storage per instance (GB)", 20, 2000, 100, 10)
+    speed = c3.selectbox("Replication link bandwidth", ["1 Gbps", "10 Gbps", "500 Mbps"], index=0)
+    c4, c5, c6 = st.columns(3)
+    wave_size = c4.slider("Instances per cutover wave", 1, 50, 10)
+    same_region = c5.toggle("Same region (cross-account)", value=True,
+                            help="Off = cross-region (adds inter-region transfer + longer sync).")
+    test_first = c6.toggle("Test-launch before cutover", value=True)
+
+    total_gb = instances * avg_gb
+    gbps = {"1 Gbps": 1.0, "10 Gbps": 10.0, "500 Mbps": 0.5}[speed]
+    # initial sync: bits over the link at ~50% effective throughput
+    sync_hours = (total_gb * 8) / (gbps * 0.5) / 3600
+    waves = math.ceil(instances / wave_size)
+    cutover_days = math.ceil(waves * (1.5 if test_first else 1.0))  # ~one wave/day with testing
+
+    # cost: staging EBS for the migration window + replication fleet + transfer
+    sync_months = max(0.25, sync_hours / 730)
+    staging_ebs = total_gb * pricing.lp("ebs_gp3_gb") * max(1, math.ceil(sync_months))
+    rep_servers = max(1, math.ceil(instances / 15))  # ~1 replication server per 15 source disks
+    rep_compute = rep_servers * pricing.lp("mgn_replication_server_hour") * max(sync_hours, 730 * sync_months)
+    transfer = 0 if same_region else total_gb * pricing.lp("interregion_transfer_gb")
+    migration_cost = staging_ebs + rep_compute + transfer
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Instances", int(instances))
+    m2.metric("Total data", f"{total_gb/1000:,.1f} TB")
+    m3.metric("Initial sync", f"~{sync_hours:,.0f} h", help="At ~50% of link bandwidth")
+    m4.metric("Cutover waves", waves, help=f"~{cutover_days} day(s) with {wave_size}/wave")
+    st.metric("Est. one-time migration cost (staging + transfer)", f"${migration_cost:,.0f}")
+
+    _runbook([
+        ("Prepare (target account = your org)", [
+            "Initialize **MGN** in the target account/region; create the **replication settings template** "
+            "(staging subnet, instance type, EBS gp3, security group).",
+            "Establish **network connectivity** between the acquired (source) account and the target "
+            "(VPC peering / Transit Gateway / Direct Connect) for replication traffic.",
+            "Set up **cross-account IAM** roles and the MGN service-linked role; map source→target subnets, "
+            "security groups, and instance types in a launch template."]),
+        ("Replicate", [
+            f"Install the **MGN replication agent** on the **{int(instances)} source EC2 instances** (or use "
+            "agentless where supported); MGN begins **continuous block-level replication** to the staging area.",
+            f"Wait for **initial sync** (~{sync_hours:,.0f} h for {total_gb/1000:,.1f} TB at this bandwidth); "
+            "ongoing changes replicate continuously after that."]),
+        ("Test", [
+            "Launch **test instances** from replicated state into an isolated target subnet; validate boot, "
+            "drivers, application, and connectivity **without impacting the source**.",
+            "Resolve boot/driver/licensing issues and refine the launch template."] if test_first else
+            ["(Testing skipped — higher risk; recommended for production workloads.)"]),
+        ("Cutover (in waves)", [
+            f"Group the fleet into **{waves} wave(s)** of ~{wave_size}; per wave: quiesce app, do a final "
+            "sync, **launch cutover instances**, repoint DNS / load balancers, and validate.",
+            "Keep the source running until validated; MGN supports rollback before you finalize."]),
+        ("Finalize", [
+            "Mark each server **migration complete**, terminate replication servers and staging volumes "
+            "(stops replication cost), and decommission the source account once empty.",
+            "Enroll the migrated workloads under your guardrails (logging, GuardDuty/Security Hub, backup)."]),
+    ])
+    _risks([
+        "Application dependencies & boot order — migrate dependent tiers in the same wave.",
+        "OS/licensing: Windows/BYOL and KMS-encrypted volumes need pre-checks; some AMIs need driver fixes.",
+        "Databases need quiescing or native replication for consistency — MGN is block-level, not app-aware.",
+        "Cutover downtime per wave — schedule maintenance windows; keep rollback ready until finalize.",
+        "Cross-account/cross-org networking + security-group/subnet mapping must be correct before cutover.",
+        "MGN is free for 2160 hours per server (90 days) — long-running staging incurs EBS/compute cost (modeled).",
+    ])
+    _refs(["mgn", "mgn_account", "ma_network"])
+
+
+# ===========================================================================
+# 9. M&A Integration (plug-and-play) — connect + absorb + migrate end-to-end
+# ===========================================================================
+
+def _ma_integration(design, derived):
+    st.markdown("**End-to-end M&A integration blueprint.** Company A (acquirer) connects a **new AWS "
+                "account** to its **datacenter** via **Direct Connect over SD-WAN**, then migrates "
+                "Company B's **VMs into Company A using AWS MGN** — all under Company A's existing "
+                "landing zone. A repeatable, *plug-and-play* pattern.")
+
+    st.markdown("###### Scenario parameters")
+    c1, c2, c3 = st.columns(3)
+    a_accounts = c1.number_input("Company A existing AWS accounts", 1, 2000, 30)
+    b_vms = c2.number_input("Company B VMs to migrate (MGN)", 1, 5000, 68)
+    avg_gb = c3.slider("Avg storage per VM (GB)", 20, 2000, 100, 10)
+    c4, c5, c6 = st.columns(3)
+    dx_speed = c4.selectbox("Direct Connect speed", list(pricing.DX_SPEEDS.keys()), index=0)
+    hub = c5.selectbox("AWS hub", ["Transit Gateway", "AWS Cloud WAN"])
+    dx_redundant = c6.toggle("Redundant DX (2 connections)", value=True)
+
+    # --- connectivity cost (1 datacenter, new account VPC + spokes) ---
+    dx_ports = 2 if dx_redundant else 1
+    speed_gbps = {"1 Gbps": 1, "10 Gbps": 10, "100 Gbps": 100}[dx_speed]
+    dx_cost = dx_ports * pricing.lp(pricing.DX_SPEEDS[dx_speed]) * pricing.HOURS_PER_MONTH
+    sdwan_cost = 2 * pricing.lp("sdwan_appliance_hour") * pricing.HOURS_PER_MONTH
+    hub_attach = pricing.lp("tgw_attachment_hour") * pricing.HOURS_PER_MONTH * 3  # new acct + a couple spokes
+    net_monthly = dx_cost + sdwan_cost + hub_attach
+
+    # --- MGN migration of Company B VMs ---
+    total_gb = b_vms * avg_gb
+    sync_hours = (total_gb * 8) / (speed_gbps * 0.5) / 3600
+    waves = math.ceil(b_vms / 10)
+    sync_months = max(0.25, sync_hours / 730)
+    staging = total_gb * pricing.lp("ebs_gp3_gb") * max(1, math.ceil(sync_months))
+    rep = max(1, math.ceil(b_vms / 15)) * pricing.lp("mgn_replication_server_hour") * max(sync_hours, 730 * sync_months)
+    migration_once = staging + rep
+
+    accounts_after = int(a_accounts) + 1  # + the new integration account
+
+    st.markdown("###### Integration at a glance")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Accounts after", accounts_after, delta="+1 new")
+    m2.metric("DC↔AWS bandwidth", f"{dx_ports * speed_gbps} Gbps",
+              help=f"{dx_ports} DX × {dx_speed} (SD-WAN overlay)")
+    m3.metric("VMs via MGN", int(b_vms), help=f"{total_gb/1000:,.1f} TB · ~{sync_hours:,.0f} h initial sync")
+    m4.metric("Cutover waves", waves)
+    n1, n2 = st.columns(2)
+    n1.metric("Connectivity cost", f"${net_monthly:,.0f}/mo")
+    n2.metric("One-time migration cost", f"${migration_once:,.0f}")
+
+    st.markdown("###### Target topology  ·  _drag to rearrange, click for detail_")
+    _render_network_graph(vpcs=5, dcs=1, hub=hub, dx_speed=dx_speed, sdwan=True, branches=3)
+
+    _runbook([
+        ("Phase 0 — Connect the new account to the datacenter (DX over SD-WAN)", [
+            f"In Company A's **Network account**, use the **{hub}** as the any-to-any hub.",
+            f"Order **Direct Connect** ({'2 connections for HA' if dx_redundant else '1 connection'}, "
+            f"{dx_speed}) to the datacenter; create a **DX Gateway** + transit VIF to the hub.",
+            "Deploy an **SD-WAN** appliance pair (HA) in the transit VPC; bring the datacenter in over the "
+            "SD-WAN overlay with the DX as the underlay; add a **Site-to-Site VPN** backup path.",
+            "**Vend the new AWS account** under Company A's org (Account Factory / AFT), apply baselines + "
+            "guardrails, and attach its VPC to the hub."]),
+        ("Phase 1 — Prepare MGN in the target (Company A)", [
+            "Initialize **AWS MGN** in the target account/region; build the **replication settings template** "
+            "(staging subnet, gp3, security group) and the launch template (subnet/SG/instance-type mapping).",
+            "Ensure **connectivity from Company B** to the MGN staging area over the DX/SD-WAN (or a temporary "
+            "VPN); set up cross-account IAM + the MGN service-linked role."]),
+        ("Phase 2 — Replicate & test the 68 VMs", [
+            f"Install the **MGN agent** on Company B's **{int(b_vms)} VMs**; continuous block replication "
+            f"begins (~{sync_hours:,.0f} h initial sync for {total_gb/1000:,.1f} TB).",
+            "**Test-launch** into an isolated subnet; validate boot/drivers/app and fix the launch template "
+            "**without impacting the source**."]),
+        ("Phase 3 — Cutover in waves & integrate", [
+            f"Cut over in **{waves} wave(s)** (~10 VMs each): quiesce, final sync, launch, repoint DNS/LB, "
+            "validate; keep rollback until finalize.",
+            "Enroll migrated workloads under Company A's guardrails (logging, GuardDuty/Security Hub, backup); "
+            "federate identity; **decommission Company B's source** once complete."]),
+    ])
+    _risks([
+        "Single Direct Connect = single point of failure — use 2 connections or a VPN/SD-WAN backup (modeled above).",
+        "Overlapping CIDRs between the datacenter, Company B, and Company A VPCs will block routing — plan addressing.",
+        "MGN is block-level, not app-aware — quiesce databases or use native replication for consistency.",
+        "Migrate dependent application tiers in the same wave; schedule per-wave downtime windows.",
+        "Security tooling delegated admin is per-organization — the new account joins Company A's existing planes.",
+        "Windows/BYOL licensing and KMS-encrypted volumes need pre-checks before cutover.",
+    ])
+    _refs(["dx", "mgn", "mgn_account", "ma_network", "aft"])
+
+    st.divider()
+    st.markdown("#### Plug-and-play: generate the integration IaC")
+    st.caption("Emits the Terraform scaffold to vend the new integration account and replicate Company "
+               "A's blueprint — a reusable starting point for repeating this pattern across acquisitions.")
+    bundle = iac.replication_bundle(design, ["company-a-integration"])
+    st.download_button("⬇️ Download integration IaC (Terraform + AFT, .zip)", bundle,
+                       file_name="ma-integration-iac.zip", mime="application/zip",
+                       use_container_width=True)
+
+
 # ---------------------------------------------------------------------------
 # Registry + entry point
 # ---------------------------------------------------------------------------
 _SCENARIOS = [
+    ("🧩 M&A Integration — connect + absorb + migrate (plug-and-play)", _ma_integration),
     ("🏢 M&A — replicate blueprint to N orgs", _ma_replicate),
     ("🤝 M&A — absorb acquired accounts", _ma_absorb),
+    ("🌐 Hybrid network — Direct Connect + SD-WAN across accounts", _hybrid_network),
+    ("🖥️ MGN — migrate EC2/VMs from an acquired account", _mgn_migration),
     ("✂️ Divestiture — carve out a business unit", _divestiture),
     ("🌍 Expansion — new region / data residency", _geo_expansion),
     ("🛡️ Compliance — onboard a new framework", _compliance),

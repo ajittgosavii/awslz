@@ -113,7 +113,48 @@ LIST_PRICES = {
         "source": "AWS data transfer pricing (US inter-region), us-east-1",
         "note": "Used for cross-region log/backup copies.",
     },
+    # --- Hybrid connectivity (Direct Connect / SD-WAN) ---
+    "dx_port_hour_1g": {
+        "value": 0.30, "unit": "per 1 Gbps dedicated DX port-hour",
+        "source": "AWS Direct Connect pricing (dedicated 1 Gbps), US",
+        "note": "~$219/month per port before data transfer.",
+    },
+    "dx_port_hour_10g": {
+        "value": 2.25, "unit": "per 10 Gbps dedicated DX port-hour",
+        "source": "AWS Direct Connect pricing (dedicated 10 Gbps), US",
+        "note": "~$1,642/month per port.",
+    },
+    "dx_port_hour_100g": {
+        "value": 22.50, "unit": "per 100 Gbps dedicated DX port-hour",
+        "source": "AWS Direct Connect pricing (dedicated 100 Gbps), US",
+        "note": "~$16,425/month per port.",
+    },
+    "dx_data_transfer_out_gb": {
+        "value": 0.02, "unit": "per GB DX data transfer out",
+        "source": "AWS Direct Connect data transfer out (US), us-east-1",
+        "note": "Inbound is free; rate varies by DX location.",
+    },
+    "sdwan_appliance_hour": {
+        "value": 0.085, "unit": "per SD-WAN appliance-hour (c5.large EC2)",
+        "source": "Amazon EC2 c5.large on-demand, us-east-1",
+        "note": "Excludes third-party SD-WAN software license; HA pair = 2 appliances.",
+    },
+    # --- AWS MGN (Application Migration Service) ---
+    "ebs_gp3_gb": {
+        "value": 0.08, "unit": "per GB-month (gp3 staging volume)",
+        "source": "Amazon EBS gp3 pricing, us-east-1",
+        "note": "MGN staging-area replication volumes.",
+    },
+    "mgn_replication_server_hour": {
+        "value": 0.0208, "unit": "per replication server-hour (t3.small)",
+        "source": "Amazon EC2 t3.small on-demand, us-east-1",
+        "note": "MGN staging replication servers; MGN service itself is free for 2160 hrs/server.",
+    },
 }
+
+# Direct Connect speed -> list-price key
+DX_SPEEDS = {"1 Gbps": "dx_port_hour_1g", "10 Gbps": "dx_port_hour_10g",
+             "100 Gbps": "dx_port_hour_100g"}
 
 # ---------------------------------------------------------------------------
 # Stated usage assumptions (per account / per month) — these are the levers that

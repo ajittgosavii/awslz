@@ -8,9 +8,11 @@ Three formats:
 Generation is deterministic (no LLM) so output is reviewable and stable.
 """
 
+import io
 import json
+import zipfile
 
-from lz_core import LZDesign
+from lz_core import LZDesign, workload_account_count
 
 # ---------------------------------------------------------------------------
 # Real SCP policy documents for the core guardrails
@@ -456,3 +458,268 @@ Provision accounts with these inputs:
 - [ ] {"AWS Backup org policies with cross-region copies" if d.backup_dr else "Define backup strategy per workload"}
 """)
     return "".join(md)
+
+
+# ---------------------------------------------------------------------------
+# Replication bundle — replicate the blueprint across N organizations
+# ---------------------------------------------------------------------------
+
+def _blueprint_module(d: LZDesign) -> str:
+    """The landing-zone blueprint as a reusable Terraform module (no provider /
+    terraform block — those are supplied by each per-org root)."""
+    per_env = d.account_strategy == "Account per workload per environment"
+    per_wl = d.account_strategy in ("Account per workload", "Account per workload per environment")
+    out = ['''# modules/landing-zone/main.tf
+# Reusable landing-zone blueprint, instantiated once per target organization by
+# the roots under orgs/<name>/. The provider is supplied by each root module.
+
+resource "aws_organizations_organization" "this" {
+  feature_set          = "ALL"
+  enabled_policy_types = ["SERVICE_CONTROL_POLICY", "TAG_POLICY"]
+  aws_service_access_principals = [
+    "cloudtrail.amazonaws.com", "config.amazonaws.com", "guardduty.amazonaws.com",
+    "securityhub.amazonaws.com", "sso.amazonaws.com", "backup.amazonaws.com",
+  ]
+}
+
+resource "aws_organizations_organizational_unit" "security" {
+  name = "Security"
+  parent_id = aws_organizations_organization.this.roots[0].id
+}
+resource "aws_organizations_organizational_unit" "infrastructure" {
+  name = "Infrastructure"
+  parent_id = aws_organizations_organization.this.roots[0].id
+}
+resource "aws_organizations_organizational_unit" "workloads" {
+  name = "Workloads"
+  parent_id = aws_organizations_organization.this.roots[0].id
+}
+''']
+    if per_env:
+        out.append('''resource "aws_organizations_organizational_unit" "workloads_prod" {
+  name = "Prod"
+  parent_id = aws_organizations_organizational_unit.workloads.id
+}
+resource "aws_organizations_organizational_unit" "workloads_nonprod" {
+  name = "NonProd"
+  parent_id = aws_organizations_organizational_unit.workloads.id
+}
+''')
+    out.append('''resource "aws_organizations_organizational_unit" "sandbox" {
+  name = "Sandbox"
+  parent_id = aws_organizations_organization.this.roots[0].id
+}
+resource "aws_organizations_organizational_unit" "suspended" {
+  name = "Suspended"
+  parent_id = aws_organizations_organization.this.roots[0].id
+}
+
+resource "aws_organizations_account" "log_archive" {
+  name = "log-archive"
+  email = format(var.account_email_domain, "log-archive")
+  parent_id = aws_organizations_organizational_unit.security.id
+  lifecycle { prevent_destroy = true }
+}
+resource "aws_organizations_account" "audit" {
+  name = "audit"
+  email = format(var.account_email_domain, "audit")
+  parent_id = aws_organizations_organizational_unit.security.id
+  lifecycle { prevent_destroy = true }
+}
+resource "aws_organizations_account" "shared_services" {
+  name = "shared-services"
+  email = format(var.account_email_domain, "shared-services")
+  parent_id = aws_organizations_organizational_unit.infrastructure.id
+}
+''')
+    if d.network_pattern != "Flat VPC peering":
+        out.append('''resource "aws_organizations_account" "network" {
+  name = "network"
+  email = format(var.account_email_domain, "network")
+  parent_id = aws_organizations_organizational_unit.infrastructure.id
+}
+''')
+    if per_env:
+        out.append('''
+locals {
+  workload_accounts = {
+    for pair in setproduct(var.workloads, var.environments) :
+    "${pair[0]}-${pair[1]}" => { prod = pair[1] == "prod" }
+  }
+}
+resource "aws_organizations_account" "workload" {
+  for_each = local.workload_accounts
+  name = each.key
+  email = format(var.account_email_domain, each.key)
+  parent_id = each.value.prod ? aws_organizations_organizational_unit.workloads_prod.id : aws_organizations_organizational_unit.workloads_nonprod.id
+}
+''')
+    elif per_wl:
+        out.append('''
+resource "aws_organizations_account" "workload" {
+  for_each = toset(var.workloads)
+  name = each.key
+  email = format(var.account_email_domain, each.key)
+  parent_id = aws_organizations_organizational_unit.workloads.id
+}
+''')
+    else:
+        out.append('''
+resource "aws_organizations_account" "workload" {
+  for_each = toset(var.environments)
+  name = "workloads-${each.key}"
+  email = format(var.account_email_domain, "workloads-${each.key}")
+  parent_id = aws_organizations_organizational_unit.workloads.id
+}
+''')
+    out.append("\n# ------------------------- Service Control Policies -------------------------\n")
+    scp_targets = {
+        "deny_leave_org": "aws_organizations_organization.this.roots[0].id",
+        "deny_root_user": "aws_organizations_organizational_unit.workloads.id",
+        "region_restriction": "aws_organizations_organization.this.roots[0].id",
+        "protect_security_services": "aws_organizations_organization.this.roots[0].id",
+        "deny_imdsv1": "aws_organizations_organizational_unit.workloads.id",
+    }
+    for name, doc in _SCP_DOCS.items():
+        out.append(f'''
+resource "aws_organizations_policy" "{name}" {{
+  name = "{name.replace('_', '-')}"
+  type = "SERVICE_CONTROL_POLICY"
+  content = jsonencode({_hcl_jsonencode(doc, d.regions)})
+}}
+resource "aws_organizations_policy_attachment" "{name}" {{
+  policy_id = aws_organizations_policy.{name}.id
+  target_id = {scp_targets[name]}
+}}
+''')
+    return "".join(out)
+
+
+def _blueprint_variables(d: LZDesign) -> str:
+    return f'''# modules/landing-zone/variables.tf
+variable "account_email_domain" {{
+  description = "printf-style email pattern, e.g. aws+%s@org.example.com"
+  type        = string
+}}
+variable "regions" {{
+  type    = list(string)
+  default = {json.dumps(d.regions)}
+}}
+variable "workloads" {{
+  type    = list(string)
+  default = {json.dumps([f"workload-{i + 1}" for i in range(d.num_workloads)])}
+}}
+variable "environments" {{
+  type    = list(string)
+  default = {json.dumps(d.environments)}
+}}
+'''
+
+
+def _org_root(d: LZDesign, org_name: str) -> str:
+    home = d.regions[0] if d.regions else "us-east-1"
+    return f'''# orgs/{org_name}/main.tf
+# One Terraform root per target organization. Configure the provider to operate
+# in THIS org's management account, then call the shared blueprint module. Each
+# org is a SEPARATE Terraform state.
+
+terraform {{
+  required_version = ">= 1.5"
+  required_providers {{ aws = {{ source = "hashicorp/aws", version = ">= 5.40" }} }}
+  # backend "s3" {{ bucket = "tfstate-{org_name}" key = "landing-zone.tfstate" region = "{home}" }}
+}}
+
+provider "aws" {{
+  region = "{home}"
+  # Run from / assume into the {org_name} management account:
+  # assume_role {{ role_arn = "arn:aws:iam::<{org_name}_MGMT_ACCOUNT_ID>:role/OrganizationAccountAccessRole" }}
+}}
+
+module "landing_zone" {{
+  source               = "../../modules/landing-zone"
+  account_email_domain = "aws+%s@{org_name}.example.com"   # CHANGE ME (unique per org)
+  regions              = {json.dumps(d.regions)}
+  environments         = {json.dumps(d.environments)}
+}}
+
+# NOTE: GuardDuty / Security Hub / Config delegated administration is configured
+# PER ORGANIZATION. Cross-org connectivity uses TGW peering / Cloud WAN /
+# PrivateLink, not AWS RAM.
+'''
+
+
+def _aft_account_requests(d: LZDesign, org_name: str) -> str:
+    per_env = d.account_strategy == "Account per workload per environment"
+    rows = []
+    n = min(d.num_workloads, 50)
+    envs = d.environments if per_env else [None]
+    for i in range(n):
+        for e in envs:
+            nm = f"workload-{i + 1}" + (f"-{e}" if e else "")
+            ou = ("Workloads/Prod" if e == "prod" else "Workloads/NonProd") if per_env else "Workloads"
+            rows.append(f'''module "{nm.replace('-', '_')}" {{
+  source = "./modules/aft-account-request"
+  control_tower_parameters = {{
+    AccountEmail              = "aws+{nm}@{org_name}.example.com"
+    AccountName               = "{nm}"
+    ManagedOrganizationalUnit = "{ou}"
+    SSOUserEmail              = "platform@{org_name}.example.com"
+    SSOUserFirstName          = "Platform"
+    SSOUserLastName           = "Team"
+  }}
+  account_tags = {{ "blueprint" = "{d.account_strategy}", "org" = "{org_name}" }}
+}}''')
+    return ("# aft/account-requests.tf — scaled workload vending via AWS Control Tower\n"
+            "# Account Factory for Terraform (AFT). Commit to your AFT account-request repo;\n"
+            "# AFT provisions + customizes each account through its GitOps pipeline.\n\n"
+            + "\n\n".join(rows) + "\n")
+
+
+def replication_bundle(d: LZDesign, org_names: list) -> bytes:
+    """Build a downloadable .zip scaffold to replicate the blueprint across orgs."""
+    org_names = [n for n in (org_names or []) if n] or ["org-1"]
+    readme = f"""# Landing Zone replication scaffold
+
+Generated by AWS Landing Zone Studio. Replicates the blueprint
+(**{d.account_strategy}**, network **{d.network_pattern}**, governance
+**{d.governance}**) across **{len(org_names)} organization(s)**: {', '.join(org_names)}.
+
+## Pattern
+Each target organization is a **separate** AWS Organization with its own
+management account and Terraform state. The shared blueprint lives in
+`modules/landing-zone/`; one root per org under `orgs/<name>/` configures a
+provider for that org's management account and calls the module.
+
+```
+.
+├── modules/landing-zone/   # reusable blueprint (OUs, SCPs, core accounts, workload vending)
+├── orgs/<org>/             # one root per target org (provider + module call)
+└── aft/                    # optional: scaled workload vending via Control Tower AFT
+```
+
+## Apply (per org)
+```bash
+cd orgs/{org_names[0]}
+terraform init
+terraform plan      # review — account emails MUST be unique across ALL orgs
+terraform apply     # run from / assume into that org's management account
+```
+
+## Important
+- **Root email uniqueness** across every account in every org.
+- **Security tooling** (GuardDuty/Security Hub/Config) delegated admin is
+  **per-organization** — configure it in each org's audit account.
+- **Cross-org connectivity** uses TGW peering / Cloud WAN / PrivateLink (AWS RAM
+  does not cross org boundaries).
+- For large fleets, prefer **AFT** (`aft/`) over inline `for_each` vending.
+- Reviewable starting point, not a turnkey deployment — always review before apply.
+"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("README.md", readme)
+        z.writestr("modules/landing-zone/main.tf", _blueprint_module(d))
+        z.writestr("modules/landing-zone/variables.tf", _blueprint_variables(d))
+        for name in org_names:
+            z.writestr(f"orgs/{name}/main.tf", _org_root(d, name))
+        z.writestr(f"aft/account-requests.{org_names[0]}.tf", _aft_account_requests(d, org_names[0]))
+    return buf.getvalue()

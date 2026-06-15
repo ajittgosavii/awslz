@@ -176,7 +176,7 @@ h("1.1 Capability summary", 2)
 table(["Area", "What it provides"], [
     ["Design Studio", "Live org/OU tree, network topology, guardrail (SCP) table, 5-dimension scorecard, sourced cost breakdown, maturity level"],
     ["Simulator", "Side-by-side comparison of all account strategies + growth stress-test"],
-    ["Playbooks", "Scenario lifecycle simulations: M&A replicate/absorb, divestiture, geo expansion, compliance onboarding, scale-out"],
+    ["Playbooks", "Scenario lifecycle simulations: M&A integration (DX+SD-WAN connect, MGN VM migration), replicate/absorb, hybrid network, divestiture, expansion, compliance, scale-out; one-click replication IaC"],
     ["Guide", "In-app user guide: quick start, per-tab how-to, workflows, FAQ"],
     ["Well-Architected", "25 weighted checks across 6 pillars, each mapped to an official best practice; one-click remediations"],
     ["IaC", "Export Terraform / LZA config / Control Tower checklist; reverse-import and score existing IaC"],

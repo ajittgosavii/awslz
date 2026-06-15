@@ -84,10 +84,13 @@ def render():
          "move as your workload count grows."),
         ("🎬 Playbooks",
          "Scenario-based **enterprise lifecycle simulations** run against your current design as a "
-         "golden blueprint: M&A (replicate to N organizations or absorb acquired accounts), "
-         "divestiture/carve-out, geo + data-residency expansion, compliance onboarding, and scale-out. "
-         "Each computes live numbers (accounts, cost, vending time, score deltas) and a grounded, "
-         "AWS-aligned runbook with risks and references."),
+         "golden blueprint: an end-to-end **M&A integration (plug-and-play)** that connects a new "
+         "account to a datacenter via **Direct Connect + SD-WAN** and migrates VMs with **AWS MGN**; "
+         "M&A replicate-to-N-orgs (with a one-click **replication IaC** download) and absorb-acquired-"
+         "accounts; a draggable **hybrid network** topology; **MGN** migration; divestiture; geo / "
+         "data-residency expansion; compliance onboarding; and scale-out. Each computes live numbers "
+         "(accounts, bandwidth, cost, vending/sync time, score deltas) and a grounded, AWS-aligned "
+         "runbook with risks and references."),
         ("🏛️ Well-Architected",
          "A pillar-by-pillar self-assessment (25 checks across the six WAF pillars). Each finding "
          "shows a remediation and the official best practice it maps to (exact/adapted). Use the "
