@@ -44,6 +44,7 @@ _STYLE = """
   .flow-np { stroke:#5B8DEF; opacity:.7; stroke-width:2.4; animation-duration:2.3s; }
   .flow-prod { stroke:#B0084D; opacity:.75; stroke-width:2.4; animation-duration:2.0s; }
   .flow-stg { stroke:#FF9900; opacity:.7; stroke-width:2.4; animation-duration:2.15s; }
+  .flow-vpnsd { stroke:#9B6DFF; stroke-dasharray:6 6; animation-duration:2.4s; opacity:.9; }
   .flow-vpn { stroke:#B0084D; stroke-dasharray:4 9; animation-duration:2.6s; opacity:.85; }
   /* DX <-> VPN auto-failover: DX active, then drops while VPN takes over */
   .fail-dx { stroke:#FF9900; stroke-width:2.6; stroke-dasharray:9 7;
@@ -180,7 +181,8 @@ def _region(x0, w, name, supernet, sdwan=True):
 
     svg = "".join(g) + "".join(f for f, *_ in flows)
     packets = "".join(_packet(d, c, dur) for _, d, c, dur in flows[:2])
-    return svg + packets, tgw_x, tgw_x + tgw_w, tgw_cx, tgw_cy
+    sd_anchor = (nx + 160, ny + 123) if sdwan else (tgw_x, tgw_cy)  # SD-WAN (HA) left edge
+    return svg + packets, tgw_x, tgw_x + tgw_w, tgw_cx, tgw_cy, sd_anchor
 
 
 def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 Gbps"):
@@ -348,8 +350,8 @@ def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdw
     s.append(_node(270, 470, 150, 56, "Site-to-Site VPN", "#3A2530", "#E9EEF7", "encrypted backup"))
 
     # Regions
-    r1, r1tx0, r1tx1, r1cx, r1cy = _region(470, 470, regions[0], "10.20.0.0/16", sdwan)
-    r2, r2tx0, r2tx1, r2cx, r2cy = _region(970, 470, regions[1], "10.30.0.0/16", sdwan)
+    r1, r1tx0, r1tx1, r1cx, r1cy, r1sd = _region(470, 470, regions[0], "10.20.0.0/16", sdwan)
+    r2, r2tx0, r2tx1, r2cx, r2cy, r2sd = _region(970, 470, regions[1], "10.30.0.0/16", sdwan)
     s.append(r1)
     s.append(r2)
 
@@ -372,6 +374,11 @@ def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdw
     sg, d1 = _flow(420, 358, r1tx0, r1cy, "flow-dx fail-dx", mid=(450, 358, 460, r1cy)); s.append(sg)
     sg, dv1 = _flow(420, 498, r1tx0, r1cy + 14, "flow-vpn fail-vpn", mid=(450, 520, 460, r1cy + 14)); s.append(sg)
     s.append(_text(345, 300, "DX primary ⇄ VPN auto-failover", AMBER, 9.5, "600", "middle"))
+    # Site-to-Site VPN also lands on the AWS-side SD-WAN (HA) appliance as the
+    # backup SD-WAN underlay (DX is the primary underlay) — distinct violet path.
+    sg, _ = _flow(420, 512, r1sd[0], r1sd[1], "flow-vpnsd", mid=(500, 560, 600, r1sd[1] + 30))
+    s.append(sg)
+    s.append(_text(430, 560, "VPN → SD-WAN (HA) backup underlay", "#9B6DFF", 8.5, "600"))
     # inter-region TGW peering (carries traffic to region 2)
     sg, dp = _flow(r1tx1, r1cy, r2tx0, r2cy, "flow-peer", mid=(r1tx1 + 70, r1cy - 60, r2tx0 - 70, r2cy - 60))
     s.append(sg); flows.append((dp, TEAL, "2.8s"))
@@ -381,13 +388,14 @@ def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdw
     packets = "".join(_packet(d, c, dur) for d, c, dur in flows)
 
     legend = []
-    lx, ly = 300, 905
+    lx, ly = 250, 905
     for i, (lab, col, cls) in enumerate([
             ("DX (primary)", AMBER, "flow-dx"), ("TGW peering", TEAL, "flow-peer"),
             ("TGW attach", AMBER, "flow-attach"), ("Inspection (firewall)", GREEN, "flow-inspect"),
             ("Egress/NAT", BLUE, "flow-egress"), ("VPN (backup)", RED, "flow-vpn"),
-            ("SD-WAN overlay", TEAL, "flow-sdwan"), ("Logs → Security", MUT, "flow-log")]):
-        x = lx + i * 150
+            ("VPN→SD-WAN", "#9B6DFF", "flow-vpnsd"), ("SD-WAN overlay", TEAL, "flow-sdwan"),
+            ("Logs → Security", MUT, "flow-log")]):
+        x = lx + i * 132
         legend.append(f'<line x1="{x}" y1="{ly}" x2="{x+24}" y2="{ly}" class="flow {cls}"/>')
         legend.append(_text(x + 30, ly + 4, lab, MUT, 10, "500"))
 
