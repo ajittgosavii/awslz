@@ -252,7 +252,7 @@ table(["Module", "Purpose"], [
     ["sharing.py", "Encode/decode a design to a URL-safe shareable token"],
     ["wizard.py", "Guided 3-step onboarding setup flow"],
     ["interactive_diagrams.py", "Clickable streamlit-agraph org graph with node drill-down"],
-    ["diagrams.py", "Graphviz builders for org structure + network topology"],
+    ["gv_diagrams.py", "Graphviz builders for org structure + network topology (renamed to free the 'diagrams' name for the icon library)"],
     ["roadmap.py", "Day 0 / 1 / 2 phased implementation plan + Gantt"],
     ["report.py", "Branded PDF design report (fpdf2) with optional AI executive summary"],
     ["llm.py", "Provider layer: Claude (Anthropic SDK, streaming) + OpenAI fallback"],

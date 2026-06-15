@@ -33,7 +33,7 @@ try:
     _HAS_AGRAPH = True
 except Exception:  # streamlit-agraph not installed — fall back to Graphviz
     _HAS_AGRAPH = False
-from diagrams import network_diagram, org_structure_diagram
+from gv_diagrams import network_diagram, org_structure_diagram
 from report import build_pdf_report
 from lz_core import (
     ACCOUNT_STRATEGIES, COMPLIANCE_FRAMEWORKS, ENVIRONMENTS, GOVERNANCE_TOOLING,
