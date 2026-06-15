@@ -111,6 +111,134 @@ def _guardrail_names(design) -> list[str]:
     return [g[0] for g in recommend_guardrails(design)]
 
 
+# ---------------------------------------------------------------------------
+# MGN per-wave cutover runbook (Markdown checklist + CSV wave plan)
+# ---------------------------------------------------------------------------
+_TIERS = ["db", "app", "web"]          # cutover order: data tier first, web last
+_TIER_ORDER = {t: i for i, t in enumerate(_TIERS)}
+_TIER_SUBNET = {"db": "data-subnet", "app": "app-subnet", "web": "web-subnet"}
+
+
+def _plan_waves(vms: int, wave_size: int, n_apps: int):
+    """Distribute `vms` servers across `n_apps` applications (each with db/app/web
+    tiers), then pack whole applications into waves of ~`wave_size` so an app's
+    dependent tiers always cut over together. Returns a list of waves; each wave
+    is a list of (app_label, [(server_id, tier), ...])."""
+    n_apps = max(1, min(n_apps, vms))
+    members = [0] * n_apps
+    for i in range(vms):
+        members[i % n_apps] += 1
+
+    apps, sid = [], 1
+    for ai in range(n_apps):
+        recs = []
+        for j in range(members[ai]):
+            tier = "db" if j == 0 else ("app" if j % 2 == 1 else "web")
+            recs.append((f"srv-{sid:03d}", tier))
+            sid += 1
+        recs.sort(key=lambda r: _TIER_ORDER[r[1]])  # db -> app -> web
+        apps.append((f"App-{chr(65 + ai % 26)}{'' if ai < 26 else ai // 26}", recs))
+
+    waves, cur, cur_n = [], [], 0
+    for label, recs in apps:
+        if cur and cur_n + len(recs) > wave_size:
+            waves.append(cur); cur, cur_n = [], 0
+        cur.append((label, recs)); cur_n += len(recs)
+    if cur:
+        waves.append(cur)
+    return waves
+
+
+def _mgn_runbook_md(vms: int, wave_size: int, n_apps: int,
+                    region: str = "us-east-1", target: str = "company-a") -> str:
+    waves = _plan_waves(vms, wave_size, n_apps)
+    L = [f"# AWS MGN Cutover Runbook — {vms} servers in {len(waves)} wave(s)",
+         f"_Target: {target} · region {region} · servers grouped into {n_apps} application(s) "
+         "(dependent tiers cut over together: **db → app → web**)._",
+         "",
+         "## Global prerequisites (once, before any wave)",
+         "- [ ] AWS MGN initialized in the target account/region; replication settings template configured "
+         "(staging subnet, gp3, security group)",
+         "- [ ] Network connectivity source → staging validated (Direct Connect / SD-WAN / VPN)",
+         "- [ ] Cross-account IAM roles + MGN service-linked role in place",
+         "- [ ] Launch templates per tier (subnet / security group / instance type mapping)",
+         "- [ ] MGN agent installed on all source servers; **initial sync = 100%** and lag healthy",
+         "- [ ] Maintenance windows agreed; stakeholder comms + rollback owners assigned",
+         ""]
+    for wi, wave in enumerate(waves, 1):
+        count = sum(len(recs) for _, recs in wave)
+        apps_in = ", ".join(f"{label} ({len(recs)})" for label, recs in wave)
+        L += [f"## Wave {wi} — {apps_in}  ·  {count} server(s)",
+              "**Cutover window:** ________  **Lead:** ________  **Rollback owner:** ________",
+              "",
+              "**T-1 day — readiness**",
+              "- [ ] Replication lag < threshold for every server in the wave",
+              "- [ ] Source backup/snapshot taken; change freeze in effect",
+              "- [ ] App owners notified; validation scripts ready",
+              "",
+              "**T-0 — cutover (order: db → app → web)**",
+              "- [ ] Quiesce application; stop writes on the **db** tier first",
+              "- [ ] Trigger **final sync**; mark wave servers *ready for cutover* in MGN",
+              "- [ ] Launch cutover instances tier-by-tier (db, then app, then web)",
+              "- [ ] Repoint DNS / load-balancer targets to the new instances",
+              "- [ ] Smoke test: health checks, key user journeys, integrations",
+              "",
+              "**Validate**",
+              "- [ ] App owner sign-off  - [ ] Monitoring/alarms green  - [ ] Performance acceptable",
+              "",
+              "**Rollback (only before *Finalize*)**",
+              "- [ ] Revert DNS/LB; restart source; keep replication running; investigate",
+              "",
+              "| Server | Tier | Target subnet | Cutover order | Status |",
+              "|--------|------|---------------|---------------|--------|"]
+        order = 1
+        for label, recs in wave:
+            for sid, tier in recs:
+                L.append(f"| {sid} | {tier} | {_TIER_SUBNET[tier]} ({label}) | {order} | ☐ |")
+                order += 1
+        L.append("")
+    L += ["## Finalize (after all waves validated)",
+          "- [ ] Mark every server **migration complete** in MGN",
+          "- [ ] Terminate replication servers + staging volumes (stops replication cost)",
+          "- [ ] Decommission the source account/environment once empty",
+          "- [ ] Enroll migrated workloads under guardrails (centralized logging, GuardDuty / "
+          "Security Hub, AWS Backup) and federate identity",
+          ""]
+    return "\n".join(L)
+
+
+def _mgn_runbook_csv(vms: int, wave_size: int, n_apps: int) -> str:
+    waves = _plan_waves(vms, wave_size, n_apps)
+    rows = ["wave,application,server,tier,target_subnet,cutover_order"]
+    for wi, wave in enumerate(waves, 1):
+        order = 1
+        for label, recs in wave:
+            for sid, tier in recs:
+                rows.append(f"{wi},{label},{sid},{tier},{_TIER_SUBNET[tier]},{order}")
+                order += 1
+    return "\n".join(rows) + "\n"
+
+
+def _runbook_downloads(vms: int, wave_size: int, key: str,
+                       region: str = "us-east-1", target: str = "company-a"):
+    """Render the app-grouping control + Markdown/CSV download buttons."""
+    vms = int(vms)
+    default_apps = max(1, math.ceil(vms / 6))
+    n_apps = st.slider("Group into applications (keeps each app's tiers in one wave)",
+                       1, max(1, vms), min(default_apps, vms), key=f"napps_{key}")
+    waves = _plan_waves(vms, wave_size, n_apps)
+    st.caption(f"Plan: **{len(waves)} wave(s)**, {n_apps} application(s), {vms} servers "
+               "(db → app → web within each wave).")
+    md = _mgn_runbook_md(vms, wave_size, n_apps, region, target)
+    csv = _mgn_runbook_csv(vms, wave_size, n_apps)
+    d1, d2 = st.columns(2)
+    d1.download_button("⬇️ Per-wave cutover runbook (Markdown)", md,
+                       file_name="mgn-cutover-runbook.md", mime="text/markdown",
+                       use_container_width=True, key=f"md_{key}")
+    d2.download_button("⬇️ Wave plan (CSV)", csv, file_name="mgn-wave-plan.csv",
+                       mime="text/csv", use_container_width=True, key=f"csv_{key}")
+
+
 # ===========================================================================
 # 1. M&A — replicate blueprint to N organizations
 # ===========================================================================
@@ -749,6 +877,12 @@ def _mgn_migration(design, derived):
     ])
     _refs(["mgn", "mgn_account", "ma_network"])
 
+    st.divider()
+    st.markdown("#### Generate the per-wave cutover runbook")
+    st.caption("Produces an executable checklist (and CSV wave plan) — VMs grouped into applications "
+               "so dependent tiers (db → app → web) cut over together.")
+    _runbook_downloads(instances, wave_size, key="mgn", target="target-account")
+
 
 # ===========================================================================
 # 9. M&A Integration (plug-and-play) — connect + absorb + migrate end-to-end
@@ -846,6 +980,11 @@ def _ma_integration(design, derived):
     st.download_button("⬇️ Download integration IaC (Terraform + AFT, .zip)", bundle,
                        file_name="ma-integration-iac.zip", mime="application/zip",
                        use_container_width=True)
+
+    st.divider()
+    st.markdown("#### Plug-and-play: per-wave MGN cutover runbook for Company B's VMs")
+    st.caption("An executable checklist (+ CSV wave plan) to migrate the VMs in dependency-safe waves.")
+    _runbook_downloads(b_vms, 10, key="integration", target="company-a")
 
 
 # ---------------------------------------------------------------------------
