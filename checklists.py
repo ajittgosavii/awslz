@@ -285,6 +285,107 @@ def to_markdown(name, cl, state) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Master plan — all three tracks combined into one programme schedule
+# ---------------------------------------------------------------------------
+_TRACK_TAG = {CHECKLISTS[0][0]: "NET", CHECKLISTS[1][0]: "CT", CHECKLISTS[2][0]: "MGN"}
+
+
+def master_schedule():
+    """Combine the three tracks into one programme. Control Tower and Networking
+    run in parallel from day 0; migration starts once accounts + connectivity are
+    ready (after the longer of those two)."""
+    scheds = {name: schedule(cl) for name, cl in CHECKLISTS}
+    names = [n for n, _ in CHECKLISTS]  # [Networking, Control Tower, Migration]
+    offsets = {names[0]: 0, names[1]: 0,
+               names[2]: max(scheds[names[0]][2], scheds[names[1]][2])}
+    rows = []
+    for name, cl in CHECKLISTS:
+        s, f, _ = scheds[name]
+        o = offsets[name]
+        for phase_title, t in _all_tasks(cl):
+            rows.append({"Track": name, "Phase": phase_title, "ID": t["id"], "Task": t["task"],
+                         "Owner": t["owner"], "Effort": _effort_days(t["effort"]), "Deps": t["deps"],
+                         "Start": s[t["id"]] + o, "End": f[t["id"]] + o})
+    total = max((r["End"] for r in rows), default=0.0)
+    return rows, total, offsets
+
+
+def master_gantt():
+    """Phase-level Gantt across all three tracks (readable programme overview)."""
+    _rows, total, offsets = master_schedule()
+    fig = go.Figure()
+    ylabels, bases, durs, colors, hover = [], [], [], [], []
+    for ti, (name, cl) in enumerate(CHECKLISTS):
+        col = _PHASE_COLORS[ti % len(_PHASE_COLORS)]
+        s, f, _ = schedule(cl)
+        o = offsets[name]
+        for phase in cl["phases"]:
+            ps = min(s[t["id"]] for t in phase["tasks"]) + o
+            pe = max(f[t["id"]] for t in phase["tasks"]) + o
+            ylabels.append(f"[{_TRACK_TAG[name]}] {phase['title']}")
+            bases.append(ps)
+            durs.append(max(0.5, pe - ps))
+            colors.append(col)
+            hover.append(f"{name}<br>{phase['title']}<br>Day {ps:.0f}–{pe:.0f}")
+    fig.add_trace(go.Bar(x=durs, base=bases, y=ylabels, orientation="h",
+                         marker_color=colors, hovertext=hover, hoverinfo="text"))
+    fig.update_layout(height=max(360, 22 * len(ylabels)),
+                      xaxis=dict(title="Working day", range=[0, total * 1.1]),
+                      yaxis=dict(autorange="reversed"), bargap=0.3,
+                      margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
+    return fig, total
+
+
+def combined_csv(states=None) -> str:
+    states = states or {}
+    rows, _total, _off = master_schedule()
+    out = ["Track,Phase,Task ID,Task,Owner,Effort (days),Depends On,Start (day),End (day),Status"]
+    for r in rows:
+        status = "Done" if states.get(r["Track"], {}).get(r["ID"]) else "Open"
+        task = r["Task"].replace('"', "'")
+        out.append(f'"{r["Track"]}","{r["Phase"]}",{r["ID"]},"{task}",{r["Owner"]},'
+                   f'{r["Effort"]},{r["Deps"] or ""},{r["Start"]:.0f},{r["End"]:.0f},{status}')
+    return "\n".join(out) + "\n"
+
+
+def _sheet_name(name: str) -> str:
+    import re
+    return re.sub(r"[\\/*?:\[\]]", " ", name)[:31]
+
+
+def combined_xlsx(states=None):
+    """Multi-sheet Excel: a Master schedule + one sheet per track. None if openpyxl
+    isn't available (caller offers CSV instead)."""
+    try:
+        import io
+        import pandas as pd
+    except Exception:
+        return None
+    try:
+        states = states or {}
+        rows, _total, _off = master_schedule()
+        master = [{"Track": r["Track"], "Phase": r["Phase"], "Task ID": r["ID"], "Task": r["Task"],
+                   "Owner": r["Owner"], "Effort (days)": r["Effort"], "Depends On": r["Deps"],
+                   "Start (day)": round(r["Start"]), "End (day)": round(r["End"]),
+                   "Status": "Done" if states.get(r["Track"], {}).get(r["ID"]) else "Open"}
+                  for r in rows]
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as w:
+            pd.DataFrame(master).to_excel(w, sheet_name="Master schedule", index=False)
+            for name, cl in CHECKLISTS:
+                s, f, _ = schedule(cl)
+                df = [{"Phase": pt, "Task ID": t["id"], "Task": t["task"], "Owner": t["owner"],
+                       "Effort (days)": _effort_days(t["effort"]), "Depends On": t["deps"],
+                       "Start (day)": round(s[t["id"]]), "End (day)": round(f[t["id"]]),
+                       "Status": "Done" if states.get(name, {}).get(t["id"]) else "Open"}
+                      for pt, t in _all_tasks(cl)]
+                pd.DataFrame(df).to_excel(w, sheet_name=_sheet_name(name), index=False)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
 
@@ -299,7 +400,15 @@ def render(user="operator", persist=False):
     cl = dict(CHECKLISTS)[pick]
     st.caption(cl["summary"])
 
-    saved = store.load_checklist(user, pick) if persist else {}
+    # Defensive: a stale/old store module (e.g. before a full redeploy) may lack
+    # the checklist functions — degrade to session-only instead of crashing.
+    can_persist = persist and hasattr(store, "load_checklist") and hasattr(store, "save_checklist")
+    saved = {}
+    if can_persist:
+        try:
+            saved = store.load_checklist(user, pick)
+        except Exception:
+            can_persist = False
     state = {}
 
     # progress + reset controls
@@ -332,15 +441,21 @@ def render(user="operator", persist=False):
         if st.button("Reset", use_container_width=True):
             for _, t in _all_tasks(cl):
                 st.session_state[f"clk_{pick}_{t['id']}"] = False
-            if persist:
-                store.save_checklist(user, pick, {})
+            if can_persist:
+                try:
+                    store.save_checklist(user, pick, {})
+                except Exception:
+                    pass
             st.rerun()
 
-    if persist:
-        store.save_checklist(user, pick, state)
-        st.caption("✅ Progress saved.")
+    if can_persist:
+        try:
+            store.save_checklist(user, pick, state)
+            st.caption("✅ Progress saved.")
+        except Exception:
+            st.caption("⚠️ Could not save progress (store unavailable) — export to keep it.")
     else:
-        st.caption("⚠️ Durable store unavailable — progress lives in this session only; export to keep it.")
+        st.caption("⚠️ Progress lives in this session only — export the CSV/Markdown to keep it.")
 
     # --- realistic timeline (critical-path schedule) ---
     with st.expander("📅 Timeline & schedule (critical path)", expanded=True):
@@ -358,9 +473,36 @@ def render(user="operator", persist=False):
                    "parallelize independent tasks; add calendar buffer for approvals and change windows.")
 
     d1, d2 = st.columns(2)
-    d1.download_button("⬇️ Project plan (CSV)", to_csv(pick, cl, state),
+    d1.download_button("⬇️ This checklist (CSV)", to_csv(pick, cl, state),
                        file_name="landing-zone-checklist.csv", mime="text/csv",
                        use_container_width=True)
-    d2.download_button("⬇️ Checklist (Markdown)", to_markdown(pick, cl, state),
+    d2.download_button("⬇️ This checklist (Markdown)", to_markdown(pick, cl, state),
                        file_name="landing-zone-checklist.md", mime="text/markdown",
                        use_container_width=True)
+
+    # --- combined master programme across all three tracks ---
+    st.divider()
+    st.markdown("#### 📦 Master project plan — all three tracks")
+    all_states = {nm: {t["id"]: bool(st.session_state.get(f"clk_{nm}_{t['id']}", False))
+                       for _, t in _all_tasks(c)} for nm, c in CHECKLISTS}
+    import math as _math
+    mfig, mtotal = master_gantt()
+    g1, g2 = st.columns([1, 1])
+    g1.metric("Programme duration", f"~{mtotal:.0f} working days")
+    g2.metric("Calendar estimate", f"~{_math.ceil(mtotal / 5)} week(s)")
+    st.caption("Control Tower and Networking run in parallel from day 0; the MGN migration starts "
+               "once accounts **and** connectivity are ready. (Long-lead Direct Connect drives the "
+               "front of the schedule.)")
+    st.plotly_chart(mfig, use_container_width=True)
+    x1, x2 = st.columns(2)
+    x1.download_button("⬇️ Master plan — all tracks (CSV)", combined_csv(all_states),
+                       file_name="landing-zone-master-plan.csv", mime="text/csv",
+                       use_container_width=True)
+    xlsx = combined_xlsx(all_states)
+    if xlsx:
+        x2.download_button("⬇️ Master plan — all tracks (Excel .xlsx)", xlsx,
+                           file_name="landing-zone-master-plan.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           use_container_width=True)
+    else:
+        x2.caption("Excel export needs `openpyxl` (CSV available).")
