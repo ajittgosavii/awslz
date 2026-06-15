@@ -1351,9 +1351,19 @@ def _ma_integration(design, derived):
 
     st.markdown("###### 🎞️ End-state architecture (animated)")
     end_view = st.radio(
-        "View", ["Two-region overview (us-east-1 + us-west-2)", "Single-region deep-dive (us-east-1)"],
+        "View", ["Two-region overview (us-east-1 + us-west-2)", "Single-region deep-dive (us-east-1)",
+                 "Multi-account org view"],
         horizontal=True, key="endstate_view", label_visibility="collapsed")
-    if end_view.startswith("Single"):
+    if end_view.startswith("Multi-account"):
+        st.caption("**Org-wide account view** — a **horizontal band of platform accounts** "
+                   "(**Network** with the **Transit Gateway**, **Security**, **Shared Services**, "
+                   "**Deployment**, **ITSM**, **Monitoring**) over the **TGW attachment fabric**, and "
+                   "**vertical application accounts** (App1…) **drilled down Account → VPC → subnet** "
+                   "(public/app/db, per region). **Every VPC attaches to the Network-account TGW**; the "
+                   "regional TGWs are **peered** and all attachments are **centrally inspected**.")
+        _end_html = arch_diagram.accounts_view(("us-east-1", "us-west-2"))
+        _h, _fn = 760, "accounts-network-view.html"
+    elif end_view.startswith("Single"):
         st.caption("**Deep-dive** of one region fully expanded — **two AZs**, every **subnet** "
                    "(public/app/db), **route tables**, **AWS Network Firewall endpoints per AZ**, "
                    "**NAT per AZ**, **IGW**, **TGW attachments**, and **Shared Services** "

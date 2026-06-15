@@ -41,6 +41,8 @@ _STYLE = """
   .flow-sdwan { stroke:#2DD4BF; opacity:.8; animation-duration:1.8s; }
   .flow-attach { stroke:#FF9900; opacity:.5; animation-duration:2.4s; }
   .flow-log { stroke:#8C9CB8; stroke-dasharray:2 7; animation-duration:3.4s; opacity:.6; }
+  .flow-np { stroke:#5B8DEF; opacity:.5; animation-duration:2.3s; }
+  .flow-prod { stroke:#B0084D; opacity:.55; animation-duration:2.0s; }
   .flow-vpn { stroke:#B0084D; stroke-dasharray:4 9; animation-duration:2.6s; opacity:.85; }
   /* DX <-> VPN auto-failover: DX active, then drops while VPN takes over */
   .fail-dx { stroke:#FF9900; stroke-width:2.6; stroke-dasharray:9 7;
@@ -385,3 +387,120 @@ def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdw
            f'<rect width="{W}" height="{H}" fill="#080D17"/>'
            + "".join(s) + "".join(legend) + packets + '</svg>')
     return (f'<div style="background:#080D17;border-radius:14px;overflow:auto">{_STYLE}{svg}</div>')
+
+
+# --- account specs (easy to swap for a real org scan: name, env, [optional cidr]) ---
+PLATFORM_ACCOUNTS = [
+    ("Network", "Transit Gateway · DX/VPN · per region, peered"),
+    ("Security", "GuardDuty · Security Hub · Log Archive · Audit"),
+    ("Shared Services", "Active Directory · DNS · AWS SSO · endpoints"),
+    ("Deployment", "CI/CD · AFT / Account Factory · pipelines"),
+    ("ITSM", "ServiceNow · CMDB · change mgmt"),
+    ("Monitoring", "CloudWatch · Coralogix · dashboards"),
+]
+APP_ACCOUNTS = [
+    ("App1 · Core Banking", "Prod"), ("App2 · Payments", "Prod"),
+    ("App3 · CRM", "Non-Prod"), ("App4 · Analytics", "Non-Prod"),
+]
+
+
+def accounts_view(regions=("us-east-1", "us-west-2"),
+                  platform=PLATFORM_ACCOUNTS, apps=APP_ACCOUNTS):
+    """Org-wide multi-account network view.
+
+    A HORIZONTAL band of platform accounts (Network[TGW], Security, Shared
+    Services, Deployment, ITSM, Monitoring) sits over a Transit-Gateway
+    attachment 'fabric'. Below it, VERTICAL application accounts (App1..) are
+    drilled down three levels — Account -> VPC (one per region) -> subnets
+    (public/app/db). Every VPC attaches to the Network-account TGW; the regional
+    TGWs are peered and all attachments are centrally inspected.
+    """
+    W, H = 1680, 1000
+    re_, rw = regions
+    s = [f'<rect width="{W}" height="{H}" fill="#080D17"/>']
+    s.append(_text(W / 2, 26, "AWS Multi-Account Network View", "#E9EEF7", 16, "700", "middle"))
+    s.append(_text(W / 2, 44, "platform accounts (horizontal) over the TGW fabric · application "
+                   f"accounts drilled Account → VPC → subnet · {re_} ⇄ {rw} peered · centrally inspected",
+                   MUT, 9.5, "500", "middle"))
+
+    env_col = {"Prod": RED, "Non-Prod": BLUE, "Dev": AMBER, "Platform": TEAL}
+    env_tag = {"Prod": "PROD", "Non-Prod": "NON-PROD", "Dev": "DEV", "Platform": "PLATFORM"}
+
+    # ---------- platform band (horizontal accounts) over the TGW fabric ----------
+    by, bh, bus_y = 64, 96, 182
+    pw = (W - 48 - 5 * 12) / 6
+    net_cx = 24 + pw / 2
+    for i, (nm, sub) in enumerate(platform):
+        x = 24 + i * (pw + 12)
+        is_net = (nm == "Network")
+        col = AMBER if is_net else NAVY
+        s.append(_rect(x, by, pw, bh, "#0C1422", stroke=col, sw=1.9 if is_net else 1.3, rx=10))
+        s.append(_rect(x, by, pw, 18, col, rx=10))
+        s.append(_text(x + 8, by + 13, nm + " account", "#0B1220", 9.5, "700"))
+        if is_net:
+            net_cx = x + pw / 2
+            cwid = pw / 2 - 18
+            s.append(_node(x + 12, by + 28, cwid, 40, "TGW", INK, "#E9EEF7", re_))
+            s.append(_rect(x + 12, by + 28, cwid, 40, "none", stroke=AMBER, sw=1.8, rx=8))
+            s.append(_node(x + pw / 2 + 6, by + 28, cwid, 40, "TGW", INK, "#E9EEF7", rw))
+            s.append(_rect(x + pw / 2 + 6, by + 28, cwid, 40, "none", stroke=AMBER, sw=1.8, rx=8))
+            s.append(_flow(x + 12 + cwid, by + 48, x + pw / 2 + 6, by + 48, "flow-peer")[0])
+            s.append(_text(x + pw / 2, by + 86, "TGW inter-region peering", TEAL, 8, "700", "middle"))
+        else:
+            s.append(_text(x + 8, by + 42, sub, MUT, 8.2, "500"))
+            s.append(_text(x + 8, by + 62, "↳ attaches to the TGW", MUT, 7.5, "600"))
+            s.append(_text(x + 8, by + 80, "(any-to-any, inspected)", MUT, 7, "500"))
+        # drop each platform account to the attachment fabric
+        s.append(_flow(x + pw / 2, by + bh, x + pw / 2, bus_y, "flow-attach")[0])
+
+    # the Transit Gateway attachment fabric (single bus = the TGW route domain)
+    s.append(_flow(36, bus_y, W - 36, bus_y, "flow-attach")[0])
+    s.append(_text(40, bus_y - 7, "🛡 Transit Gateway attachment fabric — every VPC attaches here; "
+                   "inter-VPC + on-prem traffic inspected by AWS Network Firewall (no full-mesh peering)",
+                   MUT, 9, "600"))
+
+    # ---------- application accounts (vertical), drilled Account -> VPC -> subnet ----------
+    ay, ah = 212, 604
+    n = max(1, len(apps))
+    aw = (W - 48 - (n - 1) * 30) / n
+    for k, (nm, env) in enumerate(apps):
+        x = 24 + k * (aw + 30)
+        col = env_col.get(env, NAVY)
+        s.append(_rect(x, ay, aw, ah, "#0B1422", stroke=col, sw=1.6, rx=12))
+        s.append(_rect(x, ay, aw, 26, col, rx=12))
+        s.append(_text(x + 12, ay + 17, nm, "#0B1220", 10, "700"))
+        s.append(_text(x + aw - 10, ay + 17, env_tag.get(env, env), "#0B1220", 8, "700", "end"))
+        # two VPCs, one per region, each drilled to public/app/db subnets
+        vw = (aw - 36) / 2
+        for r, (rg, base) in enumerate([(re_, "10.120"), (rw, "10.220")]):
+            vx = x + 12 + r * (vw + 12)
+            vy, vh = ay + 36, ah - 50
+            s.append(_rect(vx, vy, vw, vh, "#0C1422", stroke=col, sw=1.1, rx=9))
+            s.append(_text(vx + 8, vy + 16, f"VPC · {rg}", col, 8.6, "700"))
+            s.append(_text(vx + 8, vy + 29, f"{base}.{k * 16}.0/20", MUT, 8, "500", mono=True))
+            tiers = [("public", GREEN, "RT → IGW"), ("app", NAVY, "RT → TGW → FW"),
+                     ("db", GREY, "RT local")]
+            seg = (vh - 44) / 3
+            for j, (t, tc, rt) in enumerate(tiers):
+                sy = vy + 38 + j * seg
+                s.append(_rect(vx + 8, sy, vw - 16, seg - 8, "#0a1019", stroke=tc, sw=1.1, rx=7))
+                s.append(_text(vx + 14, sy + 16, f"{t} subnet", tc, 8.6, "700"))
+                s.append(_text(vx + 14, sy + 29, f"{base}.{k * 16 + j * 4}.0/22", "#E9EEF7", 7.6, "500", mono=True))
+                s.append(_text(vx + 14, sy + 41, f"×2 AZ · {rt}", MUT, 7, "500"))
+            # attach this VPC up to the TGW fabric (colour by environment)
+            cls = "flow-prod" if env == "Prod" else "flow-np"
+            vcx = vx + vw / 2
+            s.append(_flow(vcx, ay, vcx, bus_y, cls)[0])
+
+    # legend
+    leg = [("Prod VPC → TGW", "flow-prod"), ("Non-Prod VPC → TGW", "flow-np"),
+           ("TGW attachment fabric", "flow-attach"), ("TGW peering", "flow-peer")]
+    ly = H - 22
+    for i, (lab, cls) in enumerate(leg):
+        x = 40 + i * 300
+        s.append(f'<line x1="{x}" y1="{ly}" x2="{x+24}" y2="{ly}" class="flow {cls}"/>')
+        s.append(_text(x + 30, ly + 4, lab, MUT, 10, "500"))
+
+    svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" preserveAspectRatio="xMidYMid meet" '
+           f'xmlns="http://www.w3.org/2000/svg">' + "".join(s) + '</svg>')
+    return f'<div style="background:#080D17;border-radius:14px;overflow:auto">{_STYLE}{svg}</div>'
