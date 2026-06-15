@@ -435,13 +435,14 @@ def accounts_view(regions=("us-east-1", "us-west-2"),
     (public/app/db). Every VPC attaches to the Network-account TGW; the regional
     TGWs are peered and all attachments are centrally inspected.
     """
-    W, H = 1680, 720
+    W, H = 1680, 790
     re_, rw = regions
     s = [f'<rect width="{W}" height="{H}" fill="#080D17"/>']
     s.append(_text(W / 2, 22, "AWS Multi-Account Network View", "#E9EEF7", 16, "700", "middle"))
     s.append(_text(W / 2, 40, f"on-prem datacenter → DX/VPN → Network-account TGW · platform accounts "
-                   f"(horizontal) · application accounts drilled Account → VPC → subnet · {re_} ⇄ {rw} "
-                   "peered, centrally inspected", MUT, 9.5, "500", "middle"))
+                   f"(horizontal) · application accounts drilled Account → environment → region "
+                   f"({re_} & {rw}) → subnet · regions peered, centrally inspected", MUT, 9.5, "500",
+                   "middle"))
 
     env_col = {"Prod": RED, "Non-Prod": BLUE, "Dev": AMBER, "Platform": TEAL}
     env_tag = {"Prod": "PROD", "Non-Prod": "NON-PROD", "Dev": "DEV", "Platform": "PLATFORM"}
@@ -495,9 +496,10 @@ def accounts_view(regions=("us-east-1", "us-west-2"),
     # ---------- application accounts (vertical), drilled Account -> env VPC -> subnet ----------
     # Each app has THREE environments (Prod / Staging / Dev+Test), each its own VPC
     # (separate account & CIDR), each drilled to public/app/db subnets.
-    ay, ah = 300, 366
+    ay, ah = 300, 440
     n = max(1, len(apps))
     aw = (W - 48 - (n - 1) * 30) / n
+    tiers = [("public", GREEN), ("app", NAVY), ("db", GREY)]
     for k, nm in enumerate(apps):
         x = 24 + k * (aw + 30)
         app_id = nm.split("·")[0].strip()
@@ -507,22 +509,25 @@ def accounts_view(regions=("us-east-1", "us-west-2"),
         s.append(_text(x + aw - 10, ay + 18, "Prod · Staging · Dev+Test", "#E9EEF7", 8, "700", "end"))
         vw = (aw - 48) / 3
         for r, (en, ecol, cls, base) in enumerate(APP_ENVS):
-            base_w = base.replace("10.1", "10.2")  # us-west-2 mirror CIDR
             vx = x + 12 + r * (vw + 12)
             vy, vh = ay + 36, ah - 48
             s.append(_rect(vx, vy, vw, vh, "#0C1422", stroke=ecol, sw=1.3, rx=9))
             s.append(_rect(vx, vy, vw, 18, ecol, rx=9))
             s.append(_text(vx + 7, vy + 13, f"{app_id} · {en}", "#0B1220", 8.4, "700"))
-            s.append(_text(vx + 7, vy + 29, f"{re_}  {base}.{k * 16}.0/20", MUT, 7, "500", mono=True))
-            s.append(_text(vx + 7, vy + 39, f"{rw}  {base_w}.{k * 16}.0/20", MUT, 7, "500", mono=True))
-            tiers = [("public", GREEN, "→ IGW"), ("app", NAVY, "→ TGW → FW"), ("db", GREY, "local")]
-            seg = (vh - 50) / 3
-            for j, (t, tc, rt) in enumerate(tiers):
-                sy = vy + 48 + j * seg
-                s.append(_rect(vx + 7, sy, vw - 14, seg - 7, "#0a1019", stroke=tc, sw=1.1, rx=6))
-                s.append(_text(vx + 12, sy + 14, f"{t} subnet", tc, 8, "700"))
-                s.append(_text(vx + 12, sy + 26, f"{base}.{k * 16 + j * 4}.0/22", "#E9EEF7", 7.2, "500", mono=True))
-                s.append(_text(vx + 12, sy + 37, f"×2 AZ · 2 regions · {rt}", MUT, 6.6, "500"))
+            # two SEPARATE region sub-boxes, each drilled to its own subnets
+            rboxh = (vh - 26) / 2
+            for ri, (rg, rbase) in enumerate([(re_, base), (rw, base.replace("10.1", "10.2"))]):
+                ry = vy + 22 + ri * (rboxh + 4)
+                s.append(_rect(vx + 5, ry, vw - 10, rboxh - 2, "#0a1220", stroke="#33507A", sw=1, rx=7))
+                s.append(_rect(vx + 5, ry, vw - 10, 14, "#16263d", rx=7))
+                s.append(_text(vx + 10, ry + 11, f"◉ {rg}", "#9FC0E8", 7.2, "700"))
+                s.append(_text(vx + 10, ry + 24, f"{rbase}.{k * 16}.0/20 · ×2 AZ", MUT, 6.6, "500", mono=True))
+                ch = (rboxh - 32) / 3
+                for j, (t, tc) in enumerate(tiers):
+                    cy_ = ry + 30 + j * ch
+                    s.append(_rect(vx + 9, cy_, vw - 18, ch - 3, "#101a2c", stroke=tc, sw=1, rx=5))
+                    s.append(_text(vx + 14, cy_ + ch / 2 + 1.5,
+                                   f"{t} · {rbase}.{k * 16 + j * 4}.0/22", "#E9EEF7", 6.8, "600"))
             vcx = vx + vw / 2
             s.append(_flow(vcx, ay, vcx, bus_y, cls)[0])
 
