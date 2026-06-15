@@ -22,6 +22,7 @@ import llm
 import playbooks
 import maturity
 import roadmap
+import arch_diagram
 import sharing
 import store
 import ui
@@ -430,6 +431,17 @@ with tab_waf:
                    "using as audit evidence.")
         st.dataframe(pd.DataFrame(waf.mapping_table()), use_container_width=True, hide_index=True)
         st.markdown(f"[Official AWS Well-Architected Framework]({waf.WAF_REFERENCE_URL})")
+
+    st.markdown("##### 🏛️ Landing Zone & Foundation capability map (WAF-aligned)")
+    st.caption("The operating-model capabilities a complete landing zone provides — Service Catalogue, "
+               "Enterprise Architecture, Monitoring & Operations, Development Services, Cloud Foundation, "
+               "Security, and Governance — each **colour-tagged to the Well-Architected pillar(s)** it "
+               "primarily advances.")
+    _cap_html = arch_diagram.lz_foundation_capability_map()
+    st.components.v1.html(_cap_html, height=620, scrolling=True)
+    st.download_button("⬇️ Capability map (HTML)", _cap_html,
+                       file_name="lz-foundation-waf-capability-map.html", mime="text/html",
+                       use_container_width=True, key="lzf_capmap_dl")
 
     w1, w2 = st.columns([1, 2])
     with w1:

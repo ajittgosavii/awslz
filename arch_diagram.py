@@ -28,7 +28,7 @@ GREY = "#6E7A8C"
 MUT = "#8C9CB8"
 INKT = "#0B1220"
 
-_ENVS = [("Production", RED), ("Stage", AMBER), ("Dev", BLUE)]
+_ENVS = [("Prod", RED), ("Staging", AMBER), ("Dev+Test", BLUE)]
 
 _STYLE = """
 <style>
@@ -43,6 +43,7 @@ _STYLE = """
   .flow-log { stroke:#8C9CB8; stroke-dasharray:2 7; animation-duration:3.4s; opacity:.6; }
   .flow-np { stroke:#5B8DEF; opacity:.7; stroke-width:2.4; animation-duration:2.3s; }
   .flow-prod { stroke:#B0084D; opacity:.75; stroke-width:2.4; animation-duration:2.0s; }
+  .flow-stg { stroke:#FF9900; opacity:.7; stroke-width:2.4; animation-duration:2.15s; }
   .flow-vpn { stroke:#B0084D; stroke-dasharray:4 9; animation-duration:2.6s; opacity:.85; }
   /* DX <-> VPN auto-failover: DX active, then drops while VPN takes over */
   .fail-dx { stroke:#FF9900; stroke-width:2.6; stroke-dasharray:9 7;
@@ -58,7 +59,7 @@ _STYLE = """
 
 def _env_cidrs(supernet):
     rows, _ = cidr.allocate_plan(supernet, 18, 3, 22, 1, ["public", "app", "db"],
-                                 ["Production", "Stage", "Dev"])
+                                 ["Prod", "Staging", "Dev+Test"])
     out = {}
     for r in rows:
         out.setdefault(r["VPC"], {"vpc": r["VPC CIDR"], "subnets": {}})
@@ -110,7 +111,7 @@ def _region(x0, w, name, supernet, sdwan=True):
     # Network account
     nx, ny, nw, nh = x0 + 18, 72, w - 36, 196
     g.append(_rect(nx, ny, nw, nh, "#0C1422", stroke=NAVY, rx=12))
-    g.append(_text(nx + 12, ny + 18, "Network account", MUT, 10.5, "600"))
+    g.append(_text(nx + 12, ny + 18, "Platform & management accounts", MUT, 10.5, "600"))
     tgw_x, tgw_y, tgw_w, tgw_h = nx + 14, ny + 34, 130, 52
     g.append(_node(tgw_x, tgw_y, tgw_w, tgw_h, "Transit Gateway", INK, AMBER if False else "#E9EEF7",
                    "route tables / segments"))
@@ -121,7 +122,11 @@ def _region(x0, w, name, supernet, sdwan=True):
         g.append(_node(nx + 160, ny + 100, 150, 46, "SD-WAN (HA)", TEAL, INKT, "TGW Connect / GRE"))
     g.append(_node(nx + 322, ny + 34, nw - 336, 52, "Security acct", NAVY, "#E9EEF7", "LogArchive·Audit"))
     g.append(_node(nx + 322, ny + 100, nw - 336, 46, "Shared Services", NAVY, "#E9EEF7",
-                   "AD · ITSM · AWS SSO"))
+                   "AD · DNS · AWS SSO"))
+    # row 3 — org-wide management accounts (attach to the TGW like every VPC)
+    for _mx, _mw, _ml in ((nx + 14, 130, "Deployment"), (nx + 160, 150, "ITSM"),
+                          (nx + 322, nw - 336, "Monitoring")):
+        g.append(_node(_mx, ny + 150, _mw, 26, _ml, NAVY, "#E9EEF7"))
     g.append(_text(nx + 12, ny + 180, "+ Route 53 Resolver · VPC endpoints (PrivateLink) · "
                    "GuardDuty · Security Hub · Config (delegated admin → Audit)", MUT, 8.5, "500"))
     g.append(_text(nx + 12, ny + 191, "All VPC↔VPC and on-prem traffic inspected by AWS Network "
@@ -185,7 +190,7 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
     routed through the AWS Network Firewall (appliance-mode inspection)."""
     W, H = 1500, 1130
     ec = _env_cidrs(supernet)
-    prod = ec.get("Production", {"vpc": supernet, "subnets": {}})
+    prod = ec.get("Prod", {"vpc": supernet, "subnets": {}})
     s = [f'<rect width="{W}" height="{H}" fill="#080D17"/>']
     flows = []
 
@@ -211,6 +216,7 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
     s.append(_text(312, iy + 20, "Inspection VPC · Network account  (AWS Network Firewall — stateful)",
                    GREEN, 11.5, "700"))
     s.append(_node(1230, iy + 12, 160, 34, "Internet Gateway", BLUE, "#E9EEF7", rx=8))
+    s.append(_node(1006, iy + 12, 200, 34, "SD-WAN (HA)", TEAL, INKT, "TGW Connect / GRE → on-prem"))
     fw_anchor, nat_anchor = {}, {}
     for i, suffix in enumerate("ab"):
         ax = 330 + i * 460
@@ -226,7 +232,10 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
     # --- Production VPC fully expanded ---
     py = 430
     s.append(_rect(300, py, 1170, 340, "#0C1422", stroke=RED, sw=1.6, rx=12))
-    s.append(_text(312, py + 20, f"Production VPC · {prod['vpc']} · multi-AZ", RED, 11.5, "700"))
+    s.append(_text(312, py + 20, f"Prod VPC · {prod['vpc']} · multi-AZ", RED, 11.5, "700"))
+    s.append(_text(312, py + 33, "Prod environment shown — Staging & Dev+Test VPCs use the same "
+                   "multi-AZ pattern in separate accounts/CIDRs (see Two-region & Multi-account views)",
+                   MUT, 8.5, "500"))
     tiers = [("public", GREEN, "RT: 0.0.0.0/0 → IGW"),
              ("app", NAVY, "RT: 0.0.0.0/0 → TGW (→ firewall)"),
              ("db", GREY, "RT: local only")]
@@ -248,11 +257,11 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
     # --- Shared Services VPC ---
     sy = 794
     s.append(_rect(300, sy, 1170, 120, "#0C1422", stroke=TEAL, sw=1.4, rx=12))
-    s.append(_text(312, sy + 20, "Shared Services VPC", TEAL, 11.5, "700"))
+    s.append(_text(312, sy + 20, "Shared Services & management accounts", TEAL, 11.5, "700"))
     for i, (lab, sub) in enumerate([
-            ("Active Directory", "AWS Managed AD"), ("ITSM", "ServiceNow connector"),
-            ("AWS SSO", "IAM Identity Center"), ("Route 53 Resolver", "hybrid DNS"),
-            ("VPC Endpoints", "PrivateLink"), ("CI/CD · AMIs", "golden images")]):
+            ("Active Directory", "AWS Managed AD"), ("AWS SSO", "IAM Identity Center"),
+            ("ITSM", "ServiceNow · CMDB"), ("Deployment", "CI/CD · AFT · AMIs"),
+            ("Monitoring", "CloudWatch · Coralogix"), ("Route 53 / Endpoints", "hybrid DNS · PrivateLink")]):
         x = 318 + i * 192
         s.append(_node(x, sy + 32, 180, 56, lab, NAVY, "#E9EEF7", sub))
 
@@ -398,10 +407,10 @@ PLATFORM_ACCOUNTS = [
     ("ITSM", "ServiceNow · CMDB · change mgmt"),
     ("Monitoring", "CloudWatch · Coralogix · dashboards"),
 ]
-APP_ACCOUNTS = [
-    ("App1 · Core Banking", "Prod"), ("App2 · Payments", "Prod"),
-    ("App3 · CRM", "Non-Prod"), ("App4 · Analytics", "Non-Prod"),
-]
+APP_ACCOUNTS = ["App1 · Core Banking", "App2 · Payments", "App3 · CRM"]
+# three environments per application — each is its own VPC (own account/CIDR)
+APP_ENVS = [("Prod", RED, "flow-prod", "10.120"), ("Staging", AMBER, "flow-stg", "10.140"),
+            ("Dev+Test", BLUE, "flow-np", "10.160")]
 
 
 def accounts_view(regions=("us-east-1", "us-west-2"),
@@ -456,7 +465,9 @@ def accounts_view(regions=("us-east-1", "us-west-2"),
             s.append(_node(x + pw / 2 + 6, by + 30, cwid, 42, "TGW", INK, "#E9EEF7", rw))
             s.append(_rect(x + pw / 2 + 6, by + 30, cwid, 42, "none", stroke=AMBER, sw=1.8, rx=8))
             s.append(_flow(x + 12 + cwid, by + 51, x + pw / 2 + 6, by + 51, "flow-peer")[0])
-            s.append(_text(x + pw / 2, by + 92, "TGW inter-region peering", TEAL, 8.5, "700", "middle"))
+            s.append(_text(x + pw / 2, by + 85, "TGW inter-region peering", TEAL, 8.5, "700", "middle"))
+            s.append(_text(x + pw / 2, by + 97, "+ SD-WAN (HA) · Network Firewall · NAT egress",
+                           MUT, 7.5, "600", "middle"))
         else:
             s.append(_text(x + 10, by + 44, sub, MUT, 8.5, "500"))
             s.append(_text(x + 10, by + 66, "↳ attaches to the TGW", MUT, 8, "600"))
@@ -469,48 +480,150 @@ def accounts_view(regions=("us-east-1", "us-west-2"),
                    "inter-VPC + on-prem traffic inspected by AWS Network Firewall (no full-mesh peering)",
                    MUT, 9, "600"))
 
-    # ---------- application accounts (vertical), drilled Account -> VPC -> subnet ----------
+    # ---------- application accounts (vertical), drilled Account -> env VPC -> subnet ----------
+    # Each app has THREE environments (Prod / Staging / Dev+Test), each its own VPC
+    # (separate account & CIDR), each drilled to public/app/db subnets.
     ay, ah = 300, 366
     n = max(1, len(apps))
     aw = (W - 48 - (n - 1) * 30) / n
-    for k, (nm, env) in enumerate(apps):
+    for k, nm in enumerate(apps):
         x = 24 + k * (aw + 30)
-        col = env_col.get(env, NAVY)
-        s.append(_rect(x, ay, aw, ah, "#0B1422", stroke=col, sw=1.7, rx=12))
-        s.append(_rect(x, ay, aw, 26, col, rx=12))
-        s.append(_text(x + 12, ay + 18, nm, "#0B1220", 10.5, "700"))
-        s.append(_text(x + aw - 10, ay + 18, env_tag.get(env, env), "#0B1220", 8.5, "700", "end"))
-        vw = (aw - 36) / 2
-        for r, (rg, base) in enumerate([(re_, "10.120"), (rw, "10.220")]):
+        app_id = nm.split("·")[0].strip()
+        s.append(_rect(x, ay, aw, ah, "#0B1422", stroke=NAVY, sw=1.7, rx=12))
+        s.append(_rect(x, ay, aw, 26, NAVY, rx=12))
+        s.append(_text(x + 12, ay + 18, nm, "#E9EEF7", 10.5, "700"))
+        s.append(_text(x + aw - 10, ay + 18, "Prod · Staging · Dev+Test", "#E9EEF7", 8, "700", "end"))
+        vw = (aw - 48) / 3
+        for r, (en, ecol, cls, base) in enumerate(APP_ENVS):
             vx = x + 12 + r * (vw + 12)
             vy, vh = ay + 36, ah - 48
-            s.append(_rect(vx, vy, vw, vh, "#0C1422", stroke=col, sw=1.2, rx=9))
-            s.append(_text(vx + 10, vy + 17, f"VPC · {rg}", col, 9.5, "700"))
-            s.append(_text(vx + 10, vy + 30, f"{base}.{k * 16}.0/20", MUT, 8.5, "500", mono=True))
-            tiers = [("public", GREEN, "RT → IGW (ingress)"), ("app", NAVY, "RT → TGW → firewall"),
-                     ("db", GREY, "RT local only")]
-            seg = (vh - 42) / 3
+            s.append(_rect(vx, vy, vw, vh, "#0C1422", stroke=ecol, sw=1.3, rx=9))
+            s.append(_rect(vx, vy, vw, 18, ecol, rx=9))
+            s.append(_text(vx + 7, vy + 13, f"{app_id} · {en}", "#0B1220", 8.4, "700"))
+            s.append(_text(vx + 7, vy + 30, f"{base}.{k * 16}.0/20", MUT, 7.6, "500", mono=True))
+            tiers = [("public", GREEN, "→ IGW"), ("app", NAVY, "→ TGW → FW"), ("db", GREY, "local")]
+            seg = (vh - 40) / 3
             for j, (t, tc, rt) in enumerate(tiers):
-                sy = vy + 40 + j * seg
-                s.append(_rect(vx + 8, sy, vw - 16, seg - 8, "#0a1019", stroke=tc, sw=1.2, rx=7))
-                s.append(_text(vx + 14, sy + 17, f"{t} subnet", tc, 9, "700"))
-                s.append(_text(vx + 14, sy + 31, f"{base}.{k * 16 + j * 4}.0/22  ·  ×2 AZ", "#E9EEF7",
-                               8, "500", mono=True))
-                s.append(_text(vx + 14, sy + 45, rt, MUT, 7.5, "500"))
-            cls = "flow-prod" if env == "Prod" else "flow-np"
+                sy = vy + 38 + j * seg
+                s.append(_rect(vx + 7, sy, vw - 14, seg - 7, "#0a1019", stroke=tc, sw=1.1, rx=6))
+                s.append(_text(vx + 12, sy + 15, f"{t} subnet", tc, 8.2, "700"))
+                s.append(_text(vx + 12, sy + 28, f"{base}.{k * 16 + j * 4}.0/22", "#E9EEF7", 7.4, "500", mono=True))
+                s.append(_text(vx + 12, sy + 39, f"×2 AZ · RT {rt}", MUT, 6.8, "500"))
             vcx = vx + vw / 2
             s.append(_flow(vcx, ay, vcx, bus_y, cls)[0])
 
     # legend
-    leg = [("Prod VPC → TGW", "flow-prod"), ("Non-Prod VPC → TGW", "flow-np"),
-           ("TGW fabric", "flow-attach"), ("TGW peering", "flow-peer"),
-           ("Direct Connect", "flow-dx"), ("Site-to-Site VPN", "flow-vpn")]
+    leg = [("Prod VPC → TGW", "flow-prod"), ("Staging VPC → TGW", "flow-stg"),
+           ("Dev+Test VPC → TGW", "flow-np"), ("TGW fabric", "flow-attach"),
+           ("TGW peering", "flow-peer"), ("Direct Connect", "flow-dx"),
+           ("Site-to-Site VPN", "flow-vpn")]
     ly = H - 18
     for i, (lab, cls) in enumerate(leg):
-        x = 40 + i * 268
-        s.append(f'<line x1="{x}" y1="{ly}" x2="{x+24}" y2="{ly}" class="flow {cls}"/>')
-        s.append(_text(x + 30, ly + 4, lab, MUT, 10, "500"))
+        x = 24 + i * 236
+        s.append(f'<line x1="{x}" y1="{ly}" x2="{x+22}" y2="{ly}" class="flow {cls}"/>')
+        s.append(_text(x + 28, ly + 4, lab, MUT, 9.5, "500"))
 
     svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" preserveAspectRatio="xMidYMid meet" '
            f'xmlns="http://www.w3.org/2000/svg">' + "".join(s) + '</svg>')
     return f'<div style="background:#080D17;border-radius:14px;overflow:auto">{_STYLE}{svg}</div>'
+
+
+# ===================== Landing Zone Foundation capability map (WAF-aligned) =====================
+# Each capability is tagged to the AWS Well-Architected pillar(s) it primarily advances.
+WAF_PILLARS = {
+    "OE":   ("Operational Excellence", "#FF9900"),
+    "SEC":  ("Security", "#B0084D"),
+    "REL":  ("Reliability", "#2DD4BF"),
+    "PE":   ("Performance Efficiency", "#5B8DEF"),
+    "COST": ("Cost Optimization", "#3F8624"),
+    "SUS":  ("Sustainability", "#8C9CB8"),
+}
+_LZF_DOMAINS = [
+    ("Service Catalogue Provisioning", ["OE", "PE"],
+     ["Patterns Development", "Service Definition", "Automation",
+      "Provisioning & Config", "Configuration Mgmt", "License Provisioning"]),
+    ("Enterprise Architecture", ["OE", "PE", "REL"],
+     ["Reference Architecture", "Technology Induction", "Standards & Tools",
+      "Workload Placement", "Patterns", "Technical Compliance"]),
+    ("Monitoring & Operations", ["OE", "REL"],
+     ["Infra/Platform Monitoring · SLA", "ITSM Integration", "Scaling & Performance",
+      "HA, DR & Backup", "Application Monitoring", "Patching & Log Mgmt"]),
+    ("Development Services", ["OE"],
+     ["Version Control", "DevOps Pipeline (Jenkins/Bitbucket)", "Deployment & Release",
+      "Environment Services", "DevOps Integration", "Project Support Svcs"]),
+    ("Cloud Foundation", ["REL", "SEC", "PE"],
+     ["Subscription & Account Structure", "Cloud Network Topology", "Connectivity",
+      "Policy · Workflow · Orchestration", "Resource Organization", "IaC (Infra DevOps)"]),
+    ("Security", ["SEC"],
+     ["Identity & Access Mgmt", "Infra Security", "Risk & Compliance",
+      "Data Security", "Container Sec & Vuln Mgmt", "Threat Detection & Response"]),
+]
+_LZF_GOV = [
+    ("Financial Governance", ["COST"],
+     ["Budgeting & Planning", "Cost Allocation", "Benefits Tracking"]),
+    ("Execution Governance", ["OE"],
+     ["Demand-Supply", "Program Planning & Risk", "Operating Model & Change Mgmt"]),
+    ("Technical Governance", ["OE", "SEC"],
+     ["Architecture", "Change Control", "Policy"]),
+    ("Consumption Management", ["COST", "SUS"],
+     ["Billing & Reporting", "Showback", "Consumption Analytics",
+      "Resource Optimization", "Licensing & Commercials", "Chargeback"]),
+]
+
+
+def _capcard(x, y, w, h, title, pillars, tiles, ncol=2):
+    g = [_rect(x, y, w, h, "#0E1A2E", stroke="#2E4A6E", sw=1.3, rx=10)]
+    g.append(_rect(x, y, w, 28, "#13315C", rx=10))
+    g.append(_text(x + 12, y + 19, title, "#E9EEF7", 10.5, "700"))
+    bx = x + w - 8
+    for code in reversed(pillars):
+        col = WAF_PILLARS[code][1]
+        bw = 10 + len(code) * 6.5
+        bx -= bw + 4
+        g.append(_rect(bx, y + 6, bw, 16, col, rx=4))
+        g.append(_text(bx + bw / 2, y + 17, code, "#0B1220", 8, "700", "middle"))
+    pad, gap = 12, 9
+    tw = (w - pad * 2 - gap * (ncol - 1)) / ncol
+    nrow = (len(tiles) + ncol - 1) // ncol
+    th = min(54, (h - 40 - gap * (nrow - 1)) / nrow)
+    for idx, t in enumerate(tiles):
+        c, r = idx % ncol, idx // ncol
+        tx = x + pad + c * (tw + gap)
+        ty = y + 36 + r * (th + gap)
+        g.append(_rect(tx, ty, tw, th, "#1A476F", stroke="#2E5C8A", sw=1, rx=6))
+        g.append(_text(tx + tw / 2, ty + th / 2 + 3, t, "#E9EEF7", 8.2, "600", "middle"))
+    return "".join(g)
+
+
+def lz_foundation_capability_map():
+    """Capability/operating-model map for the Landing Zone & Foundation, with every
+    capability tagged to the AWS Well-Architected pillar(s) it primarily advances."""
+    W, H = 1600, 872
+    s = [f'<rect width="{W}" height="{H}" fill="#080D17"/>']
+    s.append(_text(W / 2, 28, "AWS Landing Zone & Foundation — aligned with the AWS Well-Architected "
+                   "Framework", "#E9EEF7", 16, "700", "middle"))
+    s.append(_text(24, 56, "WAF pillars:", MUT, 9.5, "700"))
+    lx = 108
+    for code, (nm, col) in WAF_PILLARS.items():
+        s.append(_rect(lx, 47, 14, 14, col, rx=3))
+        s.append(_text(lx + 20, 58, f"{code} · {nm}", MUT, 9, "500"))
+        lx += 30 + (len(code) + len(nm)) * 5.7
+    cw = (W - 48 - 2 * 16) / 3
+    ch = 224
+    for i, (title, pil, tiles) in enumerate(_LZF_DOMAINS):
+        cx = 24 + (i % 3) * (cw + 16)
+        cy = 78 + (i // 3) * (ch + 14)
+        s.append(_capcard(cx, cy, cw, ch, title, pil, tiles))
+    gy = 78 + 2 * (ch + 14)
+    s.append(_text(24, gy + 2, "Governance & Consumption Management", AMBER, 11.5, "700"))
+    gcw = (W - 48 - 3 * 14) / 4
+    gch = 232
+    for i, (title, pil, tiles) in enumerate(_LZF_GOV):
+        gx = 24 + i * (gcw + 14)
+        s.append(_capcard(gx, gy + 12, gcw, gch, title, pil, tiles))
+    s.append(_text(24, gy + 12 + gch + 20, "Capabilities are colour-tagged to the WAF pillar(s) they "
+                   "primarily advance — Operational Excellence · Security · Reliability · Performance "
+                   "Efficiency · Cost Optimization · Sustainability.", MUT, 9, "500"))
+    svg = (f'<svg viewBox="0 0 {W} {H}" width="100%" preserveAspectRatio="xMidYMid meet" '
+           f'xmlns="http://www.w3.org/2000/svg">' + "".join(s) + '</svg>')
+    return f'<div style="background:#080D17;border-radius:14px;overflow:auto">{svg}</div>'
