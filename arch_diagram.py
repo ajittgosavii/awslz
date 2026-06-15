@@ -314,10 +314,14 @@ def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdw
     sg, d = _flow(208, 361, 270, 358, "flow-dx")
     flows.append((d, AMBER, "2.4s"))
     s.append(sg)
-    for by in (465, 511, 557):
-        sg, _d = _flow(208, by, 122, 418, "flow-sdwan")
+    # Branches aggregate into the SD-WAN edge: bow up the right margin so each
+    # line lands on the SD-WAN edge's right side instead of piercing its centre.
+    for by, bow in ((465, 236), (511, 250), (557, 264)):
+        sg, _d = _flow(208, by, 208, 422, "flow-sdwan", mid=(bow, by, bow, 432))
         s.append(sg)
-    sg, _d = _flow(208, 418, 270, 418, "flow-sdwan")  # SD-WAN edge -> DX area
+    # SD-WAN edge -> Site-to-Site VPN (backup overlay). Terminates on the VPN
+    # node (which would otherwise be orphaned) rather than dangling in space.
+    sg, _d = _flow(208, 430, 270, 498, "flow-sdwan")
     s.append(sg)
     # DX + VPN terminate at the PRIMARY region's TGW; the second region is reached
     # via inter-region TGW peering (no second DX line).
