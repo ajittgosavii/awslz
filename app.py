@@ -17,6 +17,7 @@ import fixes
 import guide
 import iac
 import llm
+import playbooks
 import maturity
 import roadmap
 import sharing
@@ -190,13 +191,18 @@ ui.hero(design, n_total, waf_overall, cost["total"])
 if st.session_state.get("_flash"):
     st.toast(st.session_state.pop("_flash"), icon="✅")
 
-(tab_design, tab_guide, tab_sim, tab_waf, tab_iac, tab_road, tab_live, tab_drift,
+(tab_design, tab_guide, tab_sim, tab_waf, tab_iac, tab_road, tab_play, tab_live, tab_drift,
  tab_scen, tab_advisor, tab_ref) = st.tabs(
     ["🎨 Design Studio", "📖 Guide", "🧪 Simulator", "🏛️ Well-Architected", "🚀 IaC",
-     "🗺️ Roadmap", "📡 Live Estate", "📈 Drift", "🗂️ Scenarios", "🤖 AI Advisor", "📚 Reference"])
+     "🗺️ Roadmap", "🎬 Playbooks", "📡 Live Estate", "📈 Drift", "🗂️ Scenarios",
+     "🤖 AI Advisor", "📚 Reference"])
 
 with tab_guide:
     guide.render()
+
+with tab_play:
+    playbooks.render(design, {"cost": cost, "scores": scores, "n_total": n_total,
+                              "assessment": assessment, "waf_overall": waf_overall})
 
 # ============================== DESIGN STUDIO ==============================
 

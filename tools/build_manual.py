@@ -176,6 +176,8 @@ h("1.1 Capability summary", 2)
 table(["Area", "What it provides"], [
     ["Design Studio", "Live org/OU tree, network topology, guardrail (SCP) table, 5-dimension scorecard, sourced cost breakdown, maturity level"],
     ["Simulator", "Side-by-side comparison of all account strategies + growth stress-test"],
+    ["Playbooks", "Scenario lifecycle simulations: M&A replicate/absorb, divestiture, geo expansion, compliance onboarding, scale-out"],
+    ["Guide", "In-app user guide: quick start, per-tab how-to, workflows, FAQ"],
     ["Well-Architected", "25 weighted checks across 6 pillars, each mapped to an official best practice; one-click remediations"],
     ["IaC", "Export Terraform / LZA config / Control Tower checklist; reverse-import and score existing IaC"],
     ["Live Estate", "Read-only AWS Organizations scan with confidence-rated signals; Control Tower confirmed via API"],
@@ -239,6 +241,8 @@ table(["Module", "Purpose"], [
     ["waf.py", "Well-Architected engine — 25 weighted checks, official best-practice mapping (exact/adapted)"],
     ["fixes.py", "One-click remediation engine — maps findings to design mutations"],
     ["maturity.py", "Maturity levels, next-best-action, peer benchmark profiles"],
+    ["playbooks.py", "Scenario lifecycle simulations (M&A, divestiture, expansion, compliance, scale-out) with grounded runbooks"],
+    ["guide.py", "In-app user guide tab"],
     ["store.py", "Pluggable persistence (PostgreSQL/SQLite): scenarios, snapshots, comments"],
     ["live_aws.py", "Read-only AWS Organizations scanner + Control Tower confirmation + estate→design mapping"],
     ["drift_collector.py", "Headless CLI — scheduled read-only scan → 'actual' drift snapshot"],

@@ -82,6 +82,12 @@ def render():
          "Answers *“what if?”*. Compares all four account strategies side-by-side for your profile, "
          "and runs a growth stress-test showing how accounts, cost, scalability, and ops-simplicity "
          "move as your workload count grows."),
+        ("🎬 Playbooks",
+         "Scenario-based **enterprise lifecycle simulations** run against your current design as a "
+         "golden blueprint: M&A (replicate to N organizations or absorb acquired accounts), "
+         "divestiture/carve-out, geo + data-residency expansion, compliance onboarding, and scale-out. "
+         "Each computes live numbers (accounts, cost, vending time, score deltas) and a grounded, "
+         "AWS-aligned runbook with risks and references."),
         ("🏛️ Well-Architected",
          "A pillar-by-pillar self-assessment (25 checks across the six WAF pillars). Each finding "
          "shows a remediation and the official best practice it maps to (exact/adapted). Use the "
