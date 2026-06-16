@@ -3,12 +3,8 @@
 import graphviz
 from lz_core import LZDesign, workload_account_count
 
-AWS_ORANGE = "#FF9900"
-DARK = "#232F3E"
-BLUE = "#1A476F"
-GREEN = "#3F8624"
-RED = "#B0084D"
-GREY = "#5A6B86"
+# shared palette (this module's BLUE is navy; GREY is the cooler gv variant)
+from colors import AMBER as AWS_ORANGE, DARK, NAVY as BLUE, GREEN, RED, GREY_GV as GREY
 
 
 def org_structure_diagram(d: LZDesign) -> graphviz.Digraph:

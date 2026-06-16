@@ -14,21 +14,13 @@ Returned as an HTML string for `streamlit.components.v1.html`.
 from __future__ import annotations
 
 import cidr
+from colors import (AMBER, BLUE, GREEN, GREY, INK, INKT, LINE, MUT, NAVY, PANEL,
+                    RED, TEAL, WAF_PILLARS)
+from defaults import (DEFAULT_REGION, DEFAULT_REGIONS, DEFAULT_SUPERNET,
+                      DEFAULT_SUPERNET_R2)
+from environments import ENVIRONMENTS as _ENV_META
 
-INK = "#0B1422"
-PANEL = "#101A2C"
-LINE = "#2A3852"
-AMBER = "#FF9900"
-TEAL = "#2DD4BF"
-NAVY = "#1A476F"
-GREEN = "#3F8624"
-RED = "#B0084D"
-BLUE = "#5B8DEF"
-GREY = "#6E7A8C"
-MUT = "#8C9CB8"
-INKT = "#0B1220"
-
-_ENVS = [("Prod", RED), ("Staging", AMBER), ("Dev+Test", BLUE)]
+_ENVS = [(e["label"], e["color"]) for e in _ENV_META]
 
 _STYLE = """
 <style>
@@ -185,7 +177,7 @@ def _region(x0, w, name, supernet, sdwan=True):
     return svg + packets, tgw_x, tgw_x + tgw_w, tgw_cx, tgw_cy, sd_anchor
 
 
-def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 Gbps"):
+def single_region_zoom(region=DEFAULT_REGION, supernet=DEFAULT_SUPERNET, dx_speed="1 Gbps"):
     """Deep-dive of ONE region fully expanded: 2 AZs, every subnet (public/app/db),
     route tables, firewall endpoints per AZ, NAT per AZ, IGW, TGW attachments, and
     Shared Services (AD/ITSM/SSO). Animated ingress / egress / east-west flows, all
@@ -333,7 +325,7 @@ def single_region_zoom(region="us-east-1", supernet="10.20.0.0/16", dx_speed="1 
     return f'<div style="background:#080D17;border-radius:14px;overflow:auto">{_STYLE}{svg}</div>'
 
 
-def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdwan=True):
+def animated_endstate(regions=DEFAULT_REGIONS, dx_speed="1 Gbps", sdwan=True):
     W, H = 1480, 920
     s = []
     # On-premises
@@ -350,8 +342,8 @@ def animated_endstate(regions=("us-east-1", "us-west-2"), dx_speed="1 Gbps", sdw
     s.append(_node(270, 470, 150, 56, "Site-to-Site VPN", "#3A2530", "#E9EEF7", "encrypted backup"))
 
     # Regions
-    r1, r1tx0, r1tx1, r1cx, r1cy, r1sd = _region(470, 470, regions[0], "10.20.0.0/16", sdwan)
-    r2, r2tx0, r2tx1, r2cx, r2cy, r2sd = _region(970, 470, regions[1], "10.30.0.0/16", sdwan)
+    r1, r1tx0, r1tx1, r1cx, r1cy, r1sd = _region(470, 470, regions[0], DEFAULT_SUPERNET, sdwan)
+    r2, r2tx0, r2tx1, r2cx, r2cy, r2sd = _region(970, 470, regions[1], DEFAULT_SUPERNET_R2, sdwan)
     s.append(r1)
     s.append(r2)
 
@@ -420,11 +412,10 @@ PLATFORM_ACCOUNTS = [
 ]
 APP_ACCOUNTS = ["App1 · Core Banking", "App2 · Payments", "App3 · CRM"]
 # three environments per application — each is its own VPC (own account/CIDR)
-APP_ENVS = [("Prod", RED, "flow-prod", "10.120"), ("Staging", AMBER, "flow-stg", "10.140"),
-            ("Dev+Test", BLUE, "flow-np", "10.160")]
+APP_ENVS = [(e["label"], e["color"], e["flow"], e["cidr_base"]) for e in _ENV_META]
 
 
-def accounts_view(regions=("us-east-1", "us-west-2"),
+def accounts_view(regions=DEFAULT_REGIONS,
                   platform=PLATFORM_ACCOUNTS, apps=APP_ACCOUNTS):
     """Org-wide multi-account network view.
 
@@ -546,15 +537,8 @@ def accounts_view(regions=("us-east-1", "us-west-2"),
 
 
 # ===================== Landing Zone Foundation capability map (WAF-aligned) =====================
-# Each capability is tagged to the AWS Well-Architected pillar(s) it primarily advances.
-WAF_PILLARS = {
-    "OE":   ("Operational Excellence", "#FF9900"),
-    "SEC":  ("Security", "#B0084D"),
-    "REL":  ("Reliability", "#2DD4BF"),
-    "PE":   ("Performance Efficiency", "#5B8DEF"),
-    "COST": ("Cost Optimization", "#3F8624"),
-    "SUS":  ("Sustainability", "#8C9CB8"),
-}
+# Each capability is tagged to the AWS Well-Architected pillar(s) it primarily
+# advances. WAF_PILLARS (code -> (label, colour)) is imported from colors.py.
 _LZF_DOMAINS = [
     ("Service Catalogue Provisioning", ["OE", "PE"],
      ["Patterns Development", "Service Definition", "Automation",

@@ -14,13 +14,8 @@ from lz_core import (
     LZDesign, core_account_count, total_accounts, workload_account_count,
 )
 
-# AWS-ish palette
-INK = "#232F3E"
-AMBER = "#FF9900"
-NAVY = "#1A476F"
-TEAL = "#2DD4BF"
-GREEN = "#3F8624"
-RED = "#B0084D"
+# AWS-ish palette (shared single source; this module's INK is AWS squid-ink)
+from colors import DARK as INK, AMBER, NAVY, TEAL, GREEN, RED  # noqa: E402
 
 _MAX_WORKLOAD_NODES = 8
 

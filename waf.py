@@ -7,6 +7,7 @@ to the closest official practice areas; this is an educational approximation,
 not an official AWS Well-Architected Tool review.
 """
 
+from colors import WAF_PILLARS
 from lz_core import LZDesign, estimate_monthly_cost, total_accounts, workload_account_count
 
 PASS, WARN, FAIL = "pass", "warn", "fail"
@@ -64,14 +65,8 @@ OFFICIAL_BP = {
     "SUS05-BP01": ("SUS05 Hardware & services — maximize utilization", "adapted"),
 }
 
-PILLARS = [
-    "Operational Excellence",
-    "Security",
-    "Reliability",
-    "Performance Efficiency",
-    "Cost Optimization",
-    "Sustainability",
-]
+# Ordered pillar names, derived from the shared WAF_PILLARS (single source).
+PILLARS = [label for label, _color in WAF_PILLARS.values()]
 
 HEAVY_COMPLIANCE = {"PCI-DSS", "HIPAA", "FedRAMP", "NIST 800-53", "APRA CPS 234"}
 RESIDENCY_COMPLIANCE = {"GDPR", "APRA CPS 234", "FedRAMP"}

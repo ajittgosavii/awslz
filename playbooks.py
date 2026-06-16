@@ -27,6 +27,8 @@ import cidr
 import iac
 import pricing
 import waf
+from defaults import DEFAULT_REGION, DEFAULT_SUPERNET
+from environments import ENV_LABEL_TO_KEY, ENV_LABELS, ENVIRONMENTS as _ENV_META
 from lz_core import (
     COMPLIANCE_FRAMEWORKS, REGIONS,
     estimate_monthly_cost, recommend_guardrails, score_design, total_accounts,
@@ -365,7 +367,7 @@ def _acquisition_package(design, hub: str, dx_speed: str, dx_redundant: bool, b_
     import io
     import zipfile
 
-    region = design.regions[0] if getattr(design, "regions", None) else "us-east-1"
+    region = design.regions[0] if getattr(design, "regions", None) else DEFAULT_REGION
     if not plan_rows:
         env_cidrs, plan_rows = _env_cidr_plan()
     n_apps = max(1, math.ceil(int(b_vms) / 6))
@@ -910,8 +912,8 @@ def _hybrid_network(design, derived):
                        use_container_width=True, key="conn_tf_net")
 
 
-# env colours aligned with the architecture-diagram palette (RED / AMBER / BLUE) for consistency
-_ENV_DEFS = [("prod", "Prod", "#B0084D"), ("stage", "Staging", "#FF9900"), ("dev", "Dev+Test", "#5B8DEF")]
+# canonical environments (single source of truth in environments.py) -> (key, label, colour)
+_ENV_DEFS = [(e["key"], e["label"], e["color"]) for e in _ENV_META]
 _SUBNET_TIERS = {"public": "#3F8624", "app": "#1A476F", "db": "#6E7A8C"}
 
 
@@ -923,13 +925,13 @@ def _env_split(vpcs):
     return [(k, lbl, col, counts[k]) for k, lbl, col in _ENV_DEFS]
 
 
-def _env_cidr_plan(supernet="10.20.0.0/16", vpc_prefix=18, subnet_prefix=22):
+def _env_cidr_plan(supernet=DEFAULT_SUPERNET, vpc_prefix=18, subnet_prefix=22):
     """Allocate one VPC block per environment (Prod/Staging/Dev+Test) with public/app/db
     subnets. Returns (env_cidrs, rows) — env_cidrs feeds the diagram, rows feed the
     VPC/subnet IaC and the acquisition package."""
     rows, _summary = cidr.allocate_plan(supernet, vpc_prefix, 3, subnet_prefix, 1,
-                                        ["public", "app", "db"], ["Prod", "Staging", "Dev+Test"])
-    name_to_key = {"Prod": "prod", "Staging": "stage", "Dev+Test": "dev"}
+                                        ["public", "app", "db"], ENV_LABELS)
+    name_to_key = ENV_LABEL_TO_KEY
     env_cidrs = {}
     for r in rows:
         k = name_to_key.get(r["VPC"])
@@ -1313,7 +1315,7 @@ def _ma_integration(design, derived):
     # --- Address plan (CIDR) for the three environments ---
     st.markdown("###### Address plan — per environment (Prod / Staging / Dev+Test)")
     ap1, ap2 = st.columns([1, 2])
-    supernet = ap1.text_input("New-workloads supernet (IPAM pool)", value="10.20.0.0/16",
+    supernet = ap1.text_input("New-workloads supernet (IPAM pool)", value=DEFAULT_SUPERNET,
                               key="int_supernet")
     try:
         env_cidrs, plan_rows = _env_cidr_plan(supernet)
