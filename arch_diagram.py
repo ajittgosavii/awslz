@@ -5,7 +5,7 @@ AWS regions, showing every component the customer asked for — on-prem datacent
 + branches, Direct Connect (+ DX Gateway), Site-to-Site VPN backup, per-region
 Transit Gateway with inter-region peering, AWS Network Firewall (inspection),
 centralized NAT egress, SD-WAN appliances, the Security and Shared-Services
-accounts, and the Prod/Stage/Dev workload VPCs with public/app/db subnets — and
+accounts, and the Prod/Staging/Dev+Test workload VPCs with public/app/db subnets — and
 **animates the traffic flow** (flowing dashes + moving packets) along each path.
 
 Returned as an HTML string for `streamlit.components.v1.html`.
@@ -444,8 +444,6 @@ def accounts_view(regions=("us-east-1", "us-west-2"),
                    f"({re_} & {rw}) → subnet · regions peered, centrally inspected", MUT, 9.5, "500",
                    "middle"))
 
-    env_col = {"Prod": RED, "Non-Prod": BLUE, "Dev": AMBER, "Platform": TEAL}
-    env_tag = {"Prod": "PROD", "Non-Prod": "NON-PROD", "Dev": "DEV", "Platform": "PLATFORM"}
     pw = (W - 48 - 5 * 12) / 6
     by, bh, bus_y = 150, 104, 280
 

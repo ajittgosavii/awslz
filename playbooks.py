@@ -300,7 +300,7 @@ replication path to migrate **{int(b_vms)} VMs from Company B with AWS MGN**.
 3. Note the **connection ID** (`dxcon-…`) — it feeds the Terraform `dx_connection_id`.
 
 ## 2. Build the AWS hub — {hub}
-{"1. Create a **Cloud WAN global network** and **core network**; author a core-network **policy** with one **segment per environment** (production / stage / development) and an attachment policy." if is_cw else "1. Create a **Transit Gateway** (`amazon_side_asn`, default route table association/propagation enabled)."}
+{"1. Create a **Cloud WAN global network** and **core network**; author a core-network **policy** with one **segment per environment** (prod / staging / dev+test) and an attachment policy." if is_cw else "1. Create a **Transit Gateway** (`amazon_side_asn`, default route table association/propagation enabled)."}
 2. This hub provides **any-to-any** connectivity for the VPC spokes, the datacenter
    (via DX), and the SD-WAN overlay.
 
@@ -323,7 +323,7 @@ replication path to migrate **{int(b_vms)} VMs from Company B with AWS MGN**.
    **VPN connection** to the {hub}.
 2. Tune BGP so the VPN is the **lower-preference** path; it activates only if DX drops.
 
-## 6. Environment segmentation (Dev / Stage / Production)
+## 6. Environment segmentation (Prod / Staging / Dev+Test)
 Keep environments isolated using **{seg_word}** so prod can't talk to dev by default:
 {envs_md}
 - Give each environment its own {("segment" if is_cw else "route table")}; share only what's
@@ -910,7 +910,8 @@ def _hybrid_network(design, derived):
                        use_container_width=True, key="conn_tf_net")
 
 
-_ENV_DEFS = [("prod", "Production", "#B0084D"), ("stage", "Stage", "#C47400"), ("dev", "Dev", "#2A7DB0")]
+# env colours aligned with the architecture-diagram palette (RED / AMBER / BLUE) for consistency
+_ENV_DEFS = [("prod", "Prod", "#B0084D"), ("stage", "Staging", "#FF9900"), ("dev", "Dev+Test", "#5B8DEF")]
 _SUBNET_TIERS = {"public": "#3F8624", "app": "#1A476F", "db": "#6E7A8C"}
 
 
@@ -923,12 +924,12 @@ def _env_split(vpcs):
 
 
 def _env_cidr_plan(supernet="10.20.0.0/16", vpc_prefix=18, subnet_prefix=22):
-    """Allocate one VPC block per environment (Prod/Stage/Dev) with public/app/db
+    """Allocate one VPC block per environment (Prod/Staging/Dev+Test) with public/app/db
     subnets. Returns (env_cidrs, rows) — env_cidrs feeds the diagram, rows feed the
     VPC/subnet IaC and the acquisition package."""
     rows, _summary = cidr.allocate_plan(supernet, vpc_prefix, 3, subnet_prefix, 1,
-                                        ["public", "app", "db"], ["Production", "Stage", "Dev"])
-    name_to_key = {"Production": "prod", "Stage": "stage", "Dev": "dev"}
+                                        ["public", "app", "db"], ["Prod", "Staging", "Dev+Test"])
+    name_to_key = {"Prod": "prod", "Staging": "stage", "Dev+Test": "dev"}
     env_cidrs = {}
     for r in rows:
         k = name_to_key.get(r["VPC"])
@@ -940,7 +941,7 @@ def _env_cidr_plan(supernet="10.20.0.0/16", vpc_prefix=18, subnet_prefix=22):
 
 
 def _ou_structure_dot(design, include_quarantine=False):
-    """Graphviz OU tree for the landing zone, with Prod/Stage/Dev environment OUs."""
+    """Graphviz OU tree for the landing zone, with Prod/Staging/Dev+Test environment OUs."""
     INK, NAVY, GREEN, TEAL, AMBER, GREY, RED = (
         "#232F3E", "#1A476F", "#3F8624", "#2DD4BF", "#FF9900", "#6E7A8C", "#B0084D")
     dot = ['digraph ou {',
@@ -997,7 +998,7 @@ def _render_network_graph(vpcs, dcs, hub, dx_speed, sdwan, branches, key="net", 
     st.graphviz_chart(_aligned_dot(vpcs, dcs, hub, dx_speed, sdwan, branches, env_cidrs),
                       use_container_width=True)
     st.caption("On-premises → Direct Connect / SD-WAN → Network-account hub → workload VPCs, "
-               "segmented by environment (Dev / Stage / Production).")
+               "segmented by environment (Prod / Staging / Dev+Test).")
 
 
 def _aws_icon_diagram(vpcs, dcs, hub, dx_speed, sdwan, branches, env_cidrs=None):
@@ -1310,7 +1311,7 @@ def _ma_integration(design, derived):
     n2.metric("One-time migration cost", f"${migration_once:,.0f}")
 
     # --- Address plan (CIDR) for the three environments ---
-    st.markdown("###### Address plan — per environment (Dev / Stage / Production)")
+    st.markdown("###### Address plan — per environment (Prod / Staging / Dev+Test)")
     ap1, ap2 = st.columns([1, 2])
     supernet = ap1.text_input("New-workloads supernet (IPAM pool)", value="10.20.0.0/16",
                               key="int_supernet")
@@ -1347,7 +1348,7 @@ def _ma_integration(design, derived):
     st.markdown("###### Landing Zone — OU structure (after integration)")
     st.graphviz_chart(_ou_structure_dot(design, include_quarantine=True), use_container_width=True)
     st.caption("Company B's accounts land in the **Acquired / Quarantine OU** (permissive SCP), are "
-               "baselined, then graduate into the Prod / Stage / Dev OUs.")
+               "baselined, then graduate into the Prod / Staging / Dev+Test OUs.")
 
     st.markdown("###### 🎞️ End-state architecture (animated)")
     end_view = st.radio(
@@ -1376,7 +1377,7 @@ def _ma_integration(design, derived):
                    "**Direct Connect** + **VPN backup**, per-region **Transit Gateway** with "
                    "**inter-region peering**, **AWS Network Firewall** (inspection), **NAT/egress**, "
                    "**SD-WAN**, the **Security** account, **Shared Services (AD · ITSM · AWS SSO)**, "
-                   "and the **Prod/Stage/Dev VPCs with public/app/db subnets**. Dashes/packets animate "
+                   "and the **Prod/Staging/Dev+Test VPCs with public/app/db subnets**. Dashes/packets animate "
                    "the **traffic flow** (legend at the bottom).")
         _end_html = arch_diagram.animated_endstate(("us-east-1", "us-west-2"), dx_speed, True)
         _h, _fn = 700, "end-state-two-region.html"

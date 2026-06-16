@@ -40,7 +40,7 @@ NETWORKING = {
         ]},
         {"title": "1 · AWS hub build", "tasks": [
             _t("NET-1.1", "Create the Transit Gateway / Cloud WAN core network (ASN, default associations)", "Network engineer", "1d", "NET-0.4"),
-            _t("NET-1.2", "Define segments / route tables for environment isolation (Prod / Stage / Dev)", "Network engineer", "1d", "NET-1.1"),
+            _t("NET-1.2", "Define segments / route tables for environment isolation (Prod / Staging / Dev+Test)", "Network engineer", "1d", "NET-1.1"),
         ]},
         {"title": "2 · Direct Connect", "tasks": [
             _t("NET-2.1", "Create the Direct Connect Gateway (amazon_side_asn)", "Network engineer", "0.5d", "NET-1.1,NET-0.5"),
@@ -84,7 +84,7 @@ NETWORKING = {
 # ---------------------------------------------------------------------------
 CONTROL_TOWER = {
     "summary": "Stand up the landing zone with AWS Control Tower: secure the management account, "
-               "build the OU structure (incl. Prod/Stage/Dev environment OUs), vend core and "
+               "build the OU structure (incl. Prod/Staging/Dev+Test environment OUs), vend core and "
                "workload accounts, apply guardrails and identity, then build per-environment VPCs.",
     "phases": [
         {"title": "0 · Prerequisites", "tasks": [
@@ -99,7 +99,7 @@ CONTROL_TOWER = {
         ]},
         {"title": "2 · OU structure", "tasks": [
             _t("CT-2.1", "Create Infrastructure, Workloads, Sandbox, Suspended OUs", "Cloud admin", "0.5d", "CT-1.2"),
-            _t("CT-2.2", "Create Prod / Stage / Dev OUs under Workloads", "Cloud admin", "0.5d", "CT-2.1"),
+            _t("CT-2.2", "Create Prod / Staging / Dev+Test OUs under Workloads", "Cloud admin", "0.5d", "CT-2.1"),
             _t("CT-2.3", "(M&A) Create the Acquired / Quarantine OU with a permissive SCP", "Cloud admin", "0.5d", "CT-2.1"),
             _t("CT-2.4", "Register all OUs with Control Tower", "Cloud admin", "0.5d", "CT-2.1"),
         ]},
@@ -122,7 +122,7 @@ CONTROL_TOWER = {
         {"title": "6 · Account vending (per environment)", "tasks": [
             _t("CT-6.1", "Set up Account Factory / AFT (GitOps pipeline)", "Platform engineer", "3d", "CT-2.4"),
             _t("CT-6.2", "Define account-request templates + customizations (baselines)", "Platform engineer", "2d", "CT-6.1"),
-            _t("CT-6.3", "Vend workload accounts into the Prod / Stage / Dev OUs", "Platform engineer", "2d", "CT-6.2,CT-2.2"),
+            _t("CT-6.3", "Vend workload accounts into the Prod / Staging / Dev+Test OUs", "Platform engineer", "2d", "CT-6.2,CT-2.2"),
             _t("CT-6.4", "Apply tagging policies + budgets per account", "Platform engineer", "1d", "CT-6.3"),
         ]},
         {"title": "7 · VPC setup (per account / environment)", "tasks": [
